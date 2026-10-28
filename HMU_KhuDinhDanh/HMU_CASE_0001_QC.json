@@ -1,0 +1,1366 @@
+{
+  "tool": "HMU-PDF-Workflow-1.0",
+  "study_id": "HMU_CASE_0001",
+  "output": "HMU_CASE_0001_PDF_thu_nghiem.pdf",
+  "output_sha256": "80439199d11e511544940d3a21ea95b354c16e151170698242ed737009e7a5a3",
+  "pages": 150,
+  "dpi": 200,
+  "watermarks_removed": 150,
+  "source_objects_copied": false,
+  "searchable_text": false,
+  "attachments": 0,
+  "status": "DRAFT_NEEDS_QC",
+  "dicom_jpeg_processed": false,
+  "page_results": [
+    {
+      "page": 1,
+      "reviewed": false,
+      "redaction_regions": 8,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 2,
+      "reviewed": false,
+      "redaction_regions": 12,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 3,
+      "reviewed": false,
+      "redaction_regions": 1,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 4,
+      "reviewed": false,
+      "redaction_regions": 0,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 5,
+      "reviewed": false,
+      "redaction_regions": 11,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 6,
+      "reviewed": false,
+      "redaction_regions": 10,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 7,
+      "reviewed": false,
+      "redaction_regions": 9,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 8,
+      "reviewed": false,
+      "redaction_regions": 10,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 9,
+      "reviewed": false,
+      "redaction_regions": 9,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 10,
+      "reviewed": false,
+      "redaction_regions": 10,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 11,
+      "reviewed": false,
+      "redaction_regions": 11,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 12,
+      "reviewed": false,
+      "redaction_regions": 11,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 13,
+      "reviewed": false,
+      "redaction_regions": 10,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 14,
+      "reviewed": false,
+      "redaction_regions": 9,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 15,
+      "reviewed": false,
+      "redaction_regions": 14,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 16,
+      "reviewed": false,
+      "redaction_regions": 14,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 17,
+      "reviewed": false,
+      "redaction_regions": 14,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 18,
+      "reviewed": false,
+      "redaction_regions": 14,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 19,
+      "reviewed": false,
+      "redaction_regions": 14,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 20,
+      "reviewed": false,
+      "redaction_regions": 14,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 21,
+      "reviewed": false,
+      "redaction_regions": 13,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 22,
+      "reviewed": false,
+      "redaction_regions": 13,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 23,
+      "reviewed": false,
+      "redaction_regions": 14,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 24,
+      "reviewed": false,
+      "redaction_regions": 14,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 25,
+      "reviewed": false,
+      "redaction_regions": 14,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 26,
+      "reviewed": false,
+      "redaction_regions": 14,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 27,
+      "reviewed": false,
+      "redaction_regions": 13,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 28,
+      "reviewed": false,
+      "redaction_regions": 13,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 29,
+      "reviewed": false,
+      "redaction_regions": 13,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 30,
+      "reviewed": false,
+      "redaction_regions": 14,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 31,
+      "reviewed": false,
+      "redaction_regions": 12,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 32,
+      "reviewed": false,
+      "redaction_regions": 14,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 33,
+      "reviewed": false,
+      "redaction_regions": 14,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 34,
+      "reviewed": false,
+      "redaction_regions": 10,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 35,
+      "reviewed": false,
+      "redaction_regions": 12,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 36,
+      "reviewed": false,
+      "redaction_regions": 11,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 37,
+      "reviewed": false,
+      "redaction_regions": 16,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 38,
+      "reviewed": false,
+      "redaction_regions": 16,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 39,
+      "reviewed": false,
+      "redaction_regions": 16,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 40,
+      "reviewed": false,
+      "redaction_regions": 16,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 41,
+      "reviewed": false,
+      "redaction_regions": 16,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 42,
+      "reviewed": false,
+      "redaction_regions": 16,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 43,
+      "reviewed": false,
+      "redaction_regions": 15,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 44,
+      "reviewed": false,
+      "redaction_regions": 12,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 45,
+      "reviewed": false,
+      "redaction_regions": 12,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 46,
+      "reviewed": false,
+      "redaction_regions": 12,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 47,
+      "reviewed": false,
+      "redaction_regions": 12,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 48,
+      "reviewed": false,
+      "redaction_regions": 12,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 49,
+      "reviewed": false,
+      "redaction_regions": 12,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 50,
+      "reviewed": false,
+      "redaction_regions": 12,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 51,
+      "reviewed": false,
+      "redaction_regions": 12,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 52,
+      "reviewed": false,
+      "redaction_regions": 12,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 53,
+      "reviewed": false,
+      "redaction_regions": 16,
+      "image_paints_removed": 3,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 54,
+      "reviewed": false,
+      "redaction_regions": 13,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 55,
+      "reviewed": false,
+      "redaction_regions": 4,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 56,
+      "reviewed": false,
+      "redaction_regions": 11,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 57,
+      "reviewed": false,
+      "redaction_regions": 14,
+      "image_paints_removed": 3,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 58,
+      "reviewed": false,
+      "redaction_regions": 13,
+      "image_paints_removed": 3,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 59,
+      "reviewed": false,
+      "redaction_regions": 15,
+      "image_paints_removed": 3,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 60,
+      "reviewed": false,
+      "redaction_regions": 16,
+      "image_paints_removed": 3,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 61,
+      "reviewed": false,
+      "redaction_regions": 8,
+      "image_paints_removed": 3,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 62,
+      "reviewed": false,
+      "redaction_regions": 2,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 63,
+      "reviewed": false,
+      "redaction_regions": 0,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 64,
+      "reviewed": false,
+      "redaction_regions": 3,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 65,
+      "reviewed": false,
+      "redaction_regions": 2,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 66,
+      "reviewed": false,
+      "redaction_regions": 2,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 67,
+      "reviewed": false,
+      "redaction_regions": 2,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 68,
+      "reviewed": false,
+      "redaction_regions": 0,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 69,
+      "reviewed": false,
+      "redaction_regions": 2,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 70,
+      "reviewed": false,
+      "redaction_regions": 2,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 71,
+      "reviewed": false,
+      "redaction_regions": 15,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 72,
+      "reviewed": false,
+      "redaction_regions": 3,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 73,
+      "reviewed": false,
+      "redaction_regions": 14,
+      "image_paints_removed": 3,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 74,
+      "reviewed": false,
+      "redaction_regions": 13,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 75,
+      "reviewed": false,
+      "redaction_regions": 0,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 76,
+      "reviewed": false,
+      "redaction_regions": 6,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 77,
+      "reviewed": false,
+      "redaction_regions": 5,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 78,
+      "reviewed": false,
+      "redaction_regions": 5,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 79,
+      "reviewed": false,
+      "redaction_regions": 5,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 80,
+      "reviewed": false,
+      "redaction_regions": 0,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 81,
+      "reviewed": false,
+      "redaction_regions": 5,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 82,
+      "reviewed": false,
+      "redaction_regions": 0,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 83,
+      "reviewed": false,
+      "redaction_regions": 12,
+      "image_paints_removed": 3,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 84,
+      "reviewed": false,
+      "redaction_regions": 2,
+      "image_paints_removed": 3,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 85,
+      "reviewed": false,
+      "redaction_regions": 7,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 86,
+      "reviewed": false,
+      "redaction_regions": 3,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 87,
+      "reviewed": false,
+      "redaction_regions": 2,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 88,
+      "reviewed": false,
+      "redaction_regions": 2,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 89,
+      "reviewed": false,
+      "redaction_regions": 2,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 90,
+      "reviewed": false,
+      "redaction_regions": 2,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 91,
+      "reviewed": false,
+      "redaction_regions": 2,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 92,
+      "reviewed": false,
+      "redaction_regions": 2,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 93,
+      "reviewed": false,
+      "redaction_regions": 4,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 94,
+      "reviewed": false,
+      "redaction_regions": 2,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 95,
+      "reviewed": false,
+      "redaction_regions": 4,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 96,
+      "reviewed": false,
+      "redaction_regions": 2,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 97,
+      "reviewed": false,
+      "redaction_regions": 7,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 98,
+      "reviewed": false,
+      "redaction_regions": 5,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 99,
+      "reviewed": false,
+      "redaction_regions": 7,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 100,
+      "reviewed": false,
+      "redaction_regions": 5,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 101,
+      "reviewed": false,
+      "redaction_regions": 1,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 102,
+      "reviewed": false,
+      "redaction_regions": 0,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 103,
+      "reviewed": false,
+      "redaction_regions": 4,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 104,
+      "reviewed": false,
+      "redaction_regions": 9,
+      "image_paints_removed": 3,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 105,
+      "reviewed": false,
+      "redaction_regions": 4,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 106,
+      "reviewed": false,
+      "redaction_regions": 11,
+      "image_paints_removed": 3,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 107,
+      "reviewed": false,
+      "redaction_regions": 0,
+      "image_paints_removed": 3,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 108,
+      "reviewed": false,
+      "redaction_regions": 0,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 109,
+      "reviewed": false,
+      "redaction_regions": 0,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 110,
+      "reviewed": false,
+      "redaction_regions": 10,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 111,
+      "reviewed": false,
+      "redaction_regions": 0,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 112,
+      "reviewed": false,
+      "redaction_regions": 1,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 113,
+      "reviewed": false,
+      "redaction_regions": 10,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 114,
+      "reviewed": false,
+      "redaction_regions": 6,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 115,
+      "reviewed": false,
+      "redaction_regions": 11,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 116,
+      "reviewed": false,
+      "redaction_regions": 0,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 117,
+      "reviewed": false,
+      "redaction_regions": 7,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 118,
+      "reviewed": false,
+      "redaction_regions": 2,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 119,
+      "reviewed": false,
+      "redaction_regions": 6,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 120,
+      "reviewed": false,
+      "redaction_regions": 1,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 121,
+      "reviewed": false,
+      "redaction_regions": 9,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 122,
+      "reviewed": false,
+      "redaction_regions": 7,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 123,
+      "reviewed": false,
+      "redaction_regions": 0,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 124,
+      "reviewed": false,
+      "redaction_regions": 0,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 125,
+      "reviewed": false,
+      "redaction_regions": 3,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 126,
+      "reviewed": false,
+      "redaction_regions": 4,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 127,
+      "reviewed": false,
+      "redaction_regions": 14,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 128,
+      "reviewed": false,
+      "redaction_regions": 0,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 129,
+      "reviewed": false,
+      "redaction_regions": 0,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 130,
+      "reviewed": false,
+      "redaction_regions": 0,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 131,
+      "reviewed": false,
+      "redaction_regions": 1,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 132,
+      "reviewed": false,
+      "redaction_regions": 7,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 133,
+      "reviewed": false,
+      "redaction_regions": 0,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 134,
+      "reviewed": false,
+      "redaction_regions": 4,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 135,
+      "reviewed": false,
+      "redaction_regions": 0,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 136,
+      "reviewed": false,
+      "redaction_regions": 4,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 137,
+      "reviewed": false,
+      "redaction_regions": 8,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 138,
+      "reviewed": false,
+      "redaction_regions": 8,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 139,
+      "reviewed": false,
+      "redaction_regions": 9,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 140,
+      "reviewed": false,
+      "redaction_regions": 9,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 141,
+      "reviewed": false,
+      "redaction_regions": 10,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 142,
+      "reviewed": false,
+      "redaction_regions": 10,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 143,
+      "reviewed": false,
+      "redaction_regions": 12,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 144,
+      "reviewed": false,
+      "redaction_regions": 6,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 145,
+      "reviewed": false,
+      "redaction_regions": 1,
+      "image_paints_removed": 1,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 146,
+      "reviewed": false,
+      "redaction_regions": 1,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 147,
+      "reviewed": false,
+      "redaction_regions": 0,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 148,
+      "reviewed": false,
+      "redaction_regions": 1,
+      "image_paints_removed": 2,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 149,
+      "reviewed": false,
+      "redaction_regions": 0,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    },
+    {
+      "page": 150,
+      "reviewed": false,
+      "redaction_regions": 7,
+      "image_paints_removed": 0,
+      "image_pixel_fallback_regions": 0,
+      "clinical_overlap": false,
+      "output_mode": "rebuilt_image_page"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+# Python virtual environment
+.venv/
+*/.venv/
+venv/
+env/
+
+# Python cache & compiled files
+__pycache__/
+*/__pycache__/
+*.py[cod]
+*$py.class
+
+# Runtime job processing data, scanned PDFs, images, OCR cache
+HMU_JOBS/
+**/HMU_JOBS/
+*.log
+
+# System & IDE files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
