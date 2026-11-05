@@ -1,0 +1,18 @@
+{
+  "historical_eight_case_measured_source_hashes": {
+    "engine.py": "28cdb9cbe3156325f1bc880d8478af8e9d9929abad326e18c97e866393f1a799",
+    "hmu_recognizers.py": "d8f6907399aa4e21f972401c60ef1d9e897ec5838aedc3bd25e76febfd384bac",
+    "ocr_helper.py": "628e80d779469ba3804dbdf829f596e604a66f4ad9eaeed69b1f7c776f63b402"
+  },
+  "post_measurement_source_hashes": {
+    "engine.py": "42d896a71d4ac5b4e41baa5c4be60946d7fafb386a16200b98bf9335702052bf",
+    "hmu_recognizers.py": "0d4608f287dbf7e96d046593a995d6ea4a909cc95e061d5b75efaef9e1461636",
+    "ocr_helper.py": "628e80d779469ba3804dbdf829f596e604a66f4ad9eaeed69b1f7c776f63b402"
+  },
+  "post_measurement_changes": [
+    "Watermark semantic-state comparison ignores drawing sequence index/image block number only; verified geometry/style/pixels retained. Historical eight-case inputs contain no watermark.",
+    "XML index candidate names normalized NFC. Historical eight-case filenames/paths are ASCII and contain no XML."
+  ],
+  "rationale": "Historical eight-case results retained as observed measurement snapshot, not silently relabeled as a byte-identical later revision. Later targeted tests and extended benchmarks verify changed branches.",
+  "limitation": "The eight-case corpus was not rerun after those narrowly scoped fixes; use recorded source hashes when reproducing."
+}

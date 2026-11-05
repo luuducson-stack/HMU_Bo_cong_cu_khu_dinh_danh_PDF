@@ -1,0 +1,57 @@
+{
+  "python": "3.10.11",
+  "platform": "Windows-10-10.0.26200-SP0",
+  "cpu_count": 8,
+  "pymupdf": "1.26.6",
+  "pypdf": "6.10.0",
+  "source_dir": "E:\\HMU_Bo_cong_cu_khu_dinh_danh_PDF\\HMU_KhuDinhDanh",
+  "runs": 3,
+  "warmup_runs": 1,
+  "source_hashes": {
+    "engine.py": "45ebb2f7a065b877411ff07905ca48cbd1ce9cdc07ba555398083cd4b1c6b5d6",
+    "hmu_recognizers.py": "0d4608f287dbf7e96d046593a995d6ea4a909cc95e061d5b75efaef9e1461636",
+    "ocr_helper.py": "628e80d779469ba3804dbdf829f596e604a66f4ad9eaeed69b1f7c776f63b402"
+  },
+  "workers": null,
+  "memory_scope": "peak_python_rss is cumulative OS peak; peak_task_sampled_rss sums Python and live descendant OCR processes sampled every 100ms",
+  "cases": {
+    "watermark10": {
+      "pages": 10,
+      "corpus_sha256": "dd2d9413abb84e592436500786974000d2ff13e44139b16af87b378ace617b61",
+      "ground_truth_checks": {
+        "name_regions_white": true,
+        "clinical_region_mean_channel_difference_max": 1.0,
+        "reference": "clean clinical text for watermark; original image pixels for largephoto"
+      },
+      "measurements": [
+        {
+          "prepare_seconds": 19.23533180000959,
+          "export_seconds": 7.516058699984569,
+          "total_seconds": 26.75139049999416,
+          "peak_python_rss_bytes": 85225472,
+          "peak_task_sampled_rss_bytes": 68882432,
+          "job_bytes": 1031056
+        },
+        {
+          "prepare_seconds": 19.361432800011244,
+          "export_seconds": 7.446188699977938,
+          "total_seconds": 26.80762149998918,
+          "peak_python_rss_bytes": 85721088,
+          "peak_task_sampled_rss_bytes": 79474688,
+          "job_bytes": 1031056
+        },
+        {
+          "prepare_seconds": 19.791019999975106,
+          "export_seconds": 9.230320900009247,
+          "total_seconds": 29.021340899984352,
+          "peak_python_rss_bytes": 85721088,
+          "peak_task_sampled_rss_bytes": 78655488,
+          "job_bytes": 1031056
+        }
+      ],
+      "median_prepare_seconds": 19.361432800011244,
+      "median_export_seconds": 7.516058699984569,
+      "median_total_seconds": 26.80762149998918
+    }
+  }
+}

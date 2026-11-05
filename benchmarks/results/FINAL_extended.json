@@ -1,0 +1,95 @@
+{
+  "python": "3.10.11",
+  "platform": "Windows-10-10.0.26200-SP0",
+  "cpu_count": 8,
+  "pymupdf": "1.26.6",
+  "pypdf": "6.10.0",
+  "source_dir": "E:\\HMU_Bo_cong_cu_khu_dinh_danh_PDF\\HMU_KhuDinhDanh",
+  "runs": 3,
+  "warmup_runs": 1,
+  "source_hashes": {
+    "engine.py": "42d896a71d4ac5b4e41baa5c4be60946d7fafb386a16200b98bf9335702052bf",
+    "hmu_recognizers.py": "0d4608f287dbf7e96d046593a995d6ea4a909cc95e061d5b75efaef9e1461636",
+    "ocr_helper.py": "628e80d779469ba3804dbdf829f596e604a66f4ad9eaeed69b1f7c776f63b402"
+  },
+  "workers": null,
+  "memory_scope": "peak_python_rss is cumulative OS peak; peak_task_sampled_rss sums Python and live descendant OCR processes sampled every 100ms",
+  "cases": {
+    "watermark10": {
+      "pages": 10,
+      "corpus_sha256": "dd2d9413abb84e592436500786974000d2ff13e44139b16af87b378ace617b61",
+      "ground_truth_checks": {
+        "name_regions_white": true,
+        "clinical_region_mean_channel_difference_max": 1.0,
+        "reference": "clean clinical text for watermark; original image pixels for largephoto"
+      },
+      "measurements": [
+        {
+          "prepare_seconds": 30.314990399987437,
+          "export_seconds": 18.84210370000801,
+          "total_seconds": 49.15709409999545,
+          "peak_python_rss_bytes": 81002496,
+          "peak_task_sampled_rss_bytes": 75190272,
+          "job_bytes": 1031055
+        },
+        {
+          "prepare_seconds": 30.167846900003497,
+          "export_seconds": 19.27169349999167,
+          "total_seconds": 49.43954039999517,
+          "peak_python_rss_bytes": 84901888,
+          "peak_task_sampled_rss_bytes": 74854400,
+          "job_bytes": 1031056
+        },
+        {
+          "prepare_seconds": 32.021926300018094,
+          "export_seconds": 25.514024100004463,
+          "total_seconds": 57.53595040002256,
+          "peak_python_rss_bytes": 84901888,
+          "peak_task_sampled_rss_bytes": 74629120,
+          "job_bytes": 1031056
+        }
+      ],
+      "median_prepare_seconds": 30.314990399987437,
+      "median_export_seconds": 19.27169349999167,
+      "median_total_seconds": 49.43954039999517
+    },
+    "largephoto2": {
+      "pages": 2,
+      "corpus_sha256": "923083873c75adedfd8006dedbe19579ce9f1526ed7e6b749d26887022d2f4d5",
+      "ground_truth_checks": {
+        "name_regions_white": true,
+        "clinical_region_mean_channel_difference_max": 1.0,
+        "reference": "clean clinical text for watermark; original image pixels for largephoto"
+      },
+      "measurements": [
+        {
+          "prepare_seconds": 6.390385399980005,
+          "export_seconds": 1.9221567000204232,
+          "total_seconds": 8.312542100000428,
+          "peak_python_rss_bytes": 288653312,
+          "peak_task_sampled_rss_bytes": 472141824,
+          "job_bytes": 1335269
+        },
+        {
+          "prepare_seconds": 6.244897800002946,
+          "export_seconds": 1.8965175000193994,
+          "total_seconds": 8.141415300022345,
+          "peak_python_rss_bytes": 313307136,
+          "peak_task_sampled_rss_bytes": 499036160,
+          "job_bytes": 1335269
+        },
+        {
+          "prepare_seconds": 6.350103499979014,
+          "export_seconds": 1.9723440000088885,
+          "total_seconds": 8.322447499987902,
+          "peak_python_rss_bytes": 338243584,
+          "peak_task_sampled_rss_bytes": 522047488,
+          "job_bytes": 1335269
+        }
+      ],
+      "median_prepare_seconds": 6.350103499979014,
+      "median_export_seconds": 1.9221567000204232,
+      "median_total_seconds": 8.312542100000428
+    }
+  }
+}

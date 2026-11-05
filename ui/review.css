@@ -57,7 +57,7 @@ aside { padding: 12px; background: white; border-radius: 10px; min-width: 0; }
 #help { color: var(--muted); font-size: 13px; }
 .hide { display: none !important; }
 .toast-container {
-  position: fixed; right: 20px; bottom: 20px; z-index: 99;
+  position: fixed; top: 100px; right: 20px; z-index: 99; overflow-x: hidden;
   display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
   max-width: min(440px, calc(100vw - 32px)); pointer-events: none;
 }
@@ -70,10 +70,10 @@ aside { padding: 12px; background: white; border-radius: 10px; min-width: 0; }
 .pill-toast.success { background: var(--accent); color: #fff; border: 1px solid #05494f; }
 .pill-toast.info { background: #19334d; color: #fff; border: 1px solid #12263a; }
 .pill-toast.err { background: #fce9ea; color: #861d24; border: 1px solid #e6b8bc; }
-.pill-toast.out { opacity: 0; transform: translateY(8px) scale(.96); }
+.pill-toast.out { opacity: 0; transform: translateX(110%); }
 @keyframes pillToastIn {
-  from { opacity: 0; transform: translateY(12px) scale(.96); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
+  from { opacity: 0; transform: translateX(110%); }
+  to { opacity: 1; transform: translateX(0); }
 }
 @media (max-width: 850px) {
   main { grid-template-columns: minmax(0, 1fr); }

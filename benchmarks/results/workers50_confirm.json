@@ -1,0 +1,37 @@
+{
+  "corpus_sha256": "873f7ff0b02abddb1ad5acc708aa3515a610e7344984f4578eebdec9486bcd96",
+  "1": {
+    "runs": [
+      {
+        "seconds": 9.322807999997167,
+        "peak_task_sampled_rss_bytes": 192122880
+      },
+      {
+        "seconds": 8.423591400001897,
+        "peak_task_sampled_rss_bytes": 211456000
+      },
+      {
+        "seconds": 11.47680939998827,
+        "peak_task_sampled_rss_bytes": 224542720
+      }
+    ],
+    "median_seconds": 9.322807999997167
+  },
+  "6": {
+    "runs": [
+      {
+        "seconds": 9.723517600010382,
+        "peak_task_sampled_rss_bytes": 802893824
+      },
+      {
+        "seconds": 11.584134300006554,
+        "peak_task_sampled_rss_bytes": 805617664
+      },
+      {
+        "seconds": 12.11886359998607,
+        "peak_task_sampled_rss_bytes": 829755392
+      }
+    ],
+    "median_seconds": 11.584134300006554
+  }
+}

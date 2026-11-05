@@ -1,0 +1,13 @@
+{
+  "stage": "warmup",
+  "case": "watermark10",
+  "status": "refused_export",
+  "error": "UNSAFE_WATERMARK_REMOVAL on page 1",
+  "diagnosis": "raw get_drawings seqno/image block number changes after removing preceding watermark text; root investigating canonical semantic comparison",
+  "source_hashes": {
+    "engine.py": "28cdb9cbe3156325f1bc880d8478af8e9d9929abad326e18c97e866393f1a799",
+    "hmu_recognizers.py": "d8f6907399aa4e21f972401c60ef1d9e897ec5838aedc3bd25e76febfd384bac",
+    "ocr_helper.py": "628e80d779469ba3804dbdf829f596e604a66f4ad9eaeed69b1f7c776f63b402"
+  },
+  "note": "No successful timing or pixel-oracle claim for this failed final extended run. Original B0_extended passed both corpora."
+}

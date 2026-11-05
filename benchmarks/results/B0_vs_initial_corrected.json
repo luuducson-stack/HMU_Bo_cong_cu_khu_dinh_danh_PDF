@@ -1,0 +1,183 @@
+{
+  "before": "HMU_KhuDinhDanh\\benchmarks\\results\\B0_timing.json",
+  "after": "HMU_KhuDinhDanh\\benchmarks\\results\\B1_corrected_initialopts.json",
+  "comparison": "matching corpus; negative change means improvement; includes correctness overhead",
+  "rows": [
+    {
+      "case": "native10",
+      "corpus_sha256": "0581cda598a3e14f94e18be738730303ce0902e20c347a10138ad5f747370ca0",
+      "prepare": {
+        "before_seconds": 0.36315319998539053,
+        "after_seconds": 0.7991749999928288,
+        "change_percent": 120.0655260713603
+      },
+      "export": {
+        "before_seconds": 1.1000410999986343,
+        "after_seconds": 1.2712903999781702,
+        "change_percent": 15.567536520203507
+      },
+      "total": {
+        "before_seconds": 1.4248613999807276,
+        "after_seconds": 2.0704428000026383,
+        "change_percent": 45.308364731520044
+      },
+      "before_sampled_task_rss_bytes": 57024512,
+      "after_sampled_task_rss_bytes": 57896960,
+      "memory_change_percent": 1.5299525930182467
+    },
+    {
+      "case": "native150",
+      "corpus_sha256": "1a47ec2b33ebea8b674ae68890bfc305494b95213db63a61fec971afa79719bc",
+      "prepare": {
+        "before_seconds": 5.663367300003301,
+        "after_seconds": 12.691444600000978,
+        "change_percent": 124.09714799874587
+      },
+      "export": {
+        "before_seconds": 19.697548199997982,
+        "after_seconds": 18.73170819997904,
+        "change_percent": -4.9033513725278866
+      },
+      "total": {
+        "before_seconds": 26.86841940000886,
+        "after_seconds": 31.502808299992466,
+        "change_percent": 17.24846121756636
+      },
+      "before_sampled_task_rss_bytes": 85266432,
+      "after_sampled_task_rss_bytes": 83869696,
+      "memory_change_percent": -1.6380842580583144
+    },
+    {
+      "case": "scan10",
+      "corpus_sha256": "e79319f9587e35f6b37859a7d7b7993dac76da8ae5c9b2e88cc8040da6bbf62f",
+      "prepare": {
+        "before_seconds": 5.989636899990728,
+        "after_seconds": 6.681175799982157,
+        "change_percent": 11.545589683282786
+      },
+      "export": {
+        "before_seconds": 1.3686656999925617,
+        "after_seconds": 1.5253221000020858,
+        "change_percent": 11.445921382436586
+      },
+      "total": {
+        "before_seconds": 7.35830259998329,
+        "after_seconds": 8.17502450000029,
+        "change_percent": 11.099324727673675
+      },
+      "before_sampled_task_rss_bytes": 754159616,
+      "after_sampled_task_rss_bytes": 251252736,
+      "memory_change_percent": -66.68440862259058
+    },
+    {
+      "case": "scan50",
+      "corpus_sha256": "873f7ff0b02abddb1ad5acc708aa3515a610e7344984f4578eebdec9486bcd96",
+      "prepare": {
+        "before_seconds": 21.56488239997998,
+        "after_seconds": 24.577266800013604,
+        "change_percent": 13.968934975673331
+      },
+      "export": {
+        "before_seconds": 7.559809700003825,
+        "after_seconds": 6.914468300004955,
+        "change_percent": -8.53647678457492
+      },
+      "total": {
+        "before_seconds": 29.360480300005293,
+        "after_seconds": 31.49173510001856,
+        "change_percent": 7.258923485706337
+      },
+      "before_sampled_task_rss_bytes": 928980992,
+      "after_sampled_task_rss_bytes": 439820288,
+      "memory_change_percent": -52.65562032080846
+    },
+    {
+      "case": "mixed10",
+      "corpus_sha256": "47284bbfbc06018462eeacde4e2b34834ec5bcede1d0a7f3cadaf5891fe61b3b",
+      "prepare": {
+        "before_seconds": 2.9547352000081446,
+        "after_seconds": 6.049313499999698,
+        "change_percent": 104.73284712562476
+      },
+      "export": {
+        "before_seconds": 0.8738860000157729,
+        "after_seconds": 1.4515320000064094,
+        "change_percent": 66.10084152626435
+      },
+      "total": {
+        "before_seconds": 3.9883463000005577,
+        "after_seconds": 7.551569000002928,
+        "change_percent": 89.34085538163706
+      },
+      "before_sampled_task_rss_bytes": 101834752,
+      "after_sampled_task_rss_bytes": 251400192,
+      "memory_change_percent": 146.87072640978198
+    },
+    {
+      "case": "case50",
+      "corpus_sha256": "f8b8cf6be2029138b94d0cb5f67e77e0702ee180e34aa2cba602d3733d34aa00",
+      "prepare": {
+        "before_seconds": 4.719385100004729,
+        "after_seconds": 9.296432999981334,
+        "change_percent": 96.98398844315585
+      },
+      "export": {
+        "before_seconds": 14.338603699987289,
+        "after_seconds": 17.04308669999591,
+        "change_percent": 18.861550654412884
+      },
+      "total": {
+        "before_seconds": 18.835527199989883,
+        "after_seconds": 26.09692709997762,
+        "change_percent": 38.55161484405723
+      },
+      "before_sampled_task_rss_bytes": 80261120,
+      "after_sampled_task_rss_bytes": 83734528,
+      "memory_change_percent": 4.3276346006634325
+    },
+    {
+      "case": "vector20",
+      "corpus_sha256": "d9c5504799cd45857a1150ee5210974b08a5d0eb0b05253f71f1e30d32f15e70",
+      "prepare": {
+        "before_seconds": 1.1757491000171285,
+        "after_seconds": 2.5851696000027005,
+        "change_percent": 119.87425718335989
+      },
+      "export": {
+        "before_seconds": 2.1094745000009425,
+        "after_seconds": 2.5654932000034023,
+        "change_percent": 21.61764458410169
+      },
+      "total": {
+        "before_seconds": 3.285223600018071,
+        "after_seconds": 5.24027219999698,
+        "change_percent": 59.51036635582903
+      },
+      "before_sampled_task_rss_bytes": 75190272,
+      "after_sampled_task_rss_bytes": 78442496,
+      "memory_change_percent": 4.325325488914311
+    },
+    {
+      "case": "large3",
+      "corpus_sha256": "395db5cfd60de20c0f31b34c65af5d46a371332c1d4dcb98b2d21e5b5445b31a",
+      "prepare": {
+        "before_seconds": 2.0165848000033293,
+        "after_seconds": 2.4427323000272736,
+        "change_percent": 21.132138852937942
+      },
+      "export": {
+        "before_seconds": 0.374117400002433,
+        "after_seconds": 0.5252970999863464,
+        "change_percent": 40.40969492007864
+      },
+      "total": {
+        "before_seconds": 2.384888000000501,
+        "after_seconds": 2.9162490000016987,
+        "change_percent": 22.280333499983485
+      },
+      "before_sampled_task_rss_bytes": 426663936,
+      "after_sampled_task_rss_bytes": 207847424,
+      "memory_change_percent": -51.285448226868645
+    }
+  ]
+}

@@ -9,6 +9,7 @@ import secrets
 import shutil
 import sqlite3
 import time
+from error_pipeline import record_error_event
 
 
 RUNNING = {'PREPARING', 'EXPORTING', 'VERIFYING'}
@@ -141,8 +142,15 @@ def enqueue(db_path: Path, sources: list[Path]) -> list[str]:
                 pages = len(doc)
                 if not pages:
                     raise ValueError('Empty PDF')
-        except Exception:
+        except Exception as exc:
             error = 'PDF hỏng, trống hoặc có mật khẩu; cần kiểm tra nguồn.'
+            record_error_event(
+                root,
+                exc,
+                stage='BATCH_ENQUEUE',
+                source_file=source.name,
+                category='FILE_ERROR',
+            )
         with _db(db_path) as con:
             old = con.execute('SELECT id,state FROM jobs WHERE source_path=? AND source_sha256=?', (str(source), digest)).fetchone()
             if old:
@@ -413,11 +421,23 @@ def _reap_active_workers(db_path: Path, active: dict, by_id: dict, timeout_secon
             finish_worker(db_path, ident, result)
         else:
             error_path = Path(row['job_dir']) / f"error_{work['attempt_id']}.json"
-            error = (json.loads(error_path.read_text(encoding='utf8'))
-                     if error_path.exists()
-                     else {'message': f'Worker stopped with exit {code}', 'retryable': True})
+            if error_path.exists():
+                try:
+                    error = json.loads(error_path.read_text(encoding='utf8'))
+                except Exception:
+                    error = {'message': f'Worker stopped with exit {code}', 'retryable': True}
+            else:
+                err_record = record_error_event(
+                    root,
+                    RuntimeError(f'Worker stopped with exit {code}'),
+                    stage='BATCH_WORKER',
+                    source_file=row.get('source_name'),
+                    job_id=ident,
+                    queue_id=ident,
+                )
+                error = {**err_record, 'retryable': True}
             retry = bool(error.get('retryable')) and row['attempts'] < QueueLimits.MAX_ATTEMPTS
-            finish_worker(db_path, ident, {'state': 'QUEUED' if retry else 'FAILED', 'error': error['message']})
+            finish_worker(db_path, ident, {'state': 'QUEUED' if retry else 'FAILED', 'error': error.get('message', ''), 'error_detail': error})
     return mutated
 
 
@@ -453,7 +473,15 @@ def _admit_pending_workers(
                 work_root / f'worker_{attempt}.log',
             )
         except Exception as exc:
-            set_stage_result(db_path, row['id'], expected_state='PREPARING', result={'state': 'FAILED', 'error': str(exc)})
+            err = record_error_event(
+                Path(db_path).parent.parent,
+                exc,
+                stage='BATCH_WORKER',
+                source_file=row.get('source_name'),
+                job_id=row['id'],
+                queue_id=row['id'],
+            )
+            set_stage_result(db_path, row['id'], expected_state='PREPARING', result={'state': 'FAILED', 'error': str(exc), 'error_detail': err})
             raise
         active[row['id']] = dict(process=managed, attempt_id=attempt, started=time.monotonic())
         pending = [r for r in pending if r['id'] != row['id']]

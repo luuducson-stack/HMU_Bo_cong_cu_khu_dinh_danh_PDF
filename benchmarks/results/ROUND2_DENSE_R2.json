@@ -1,0 +1,74 @@
+{
+  "python": "3.12.10",
+  "pymupdf": "1.26.6",
+  "source_dir": "E:\\HMU_Bo_cong_cu_khu_dinh_danh_PDF\\HMU_KhuDinhDanh",
+  "source_hashes": {
+    "engine.py": "3691d1f4d3846cf7288d9508e2eb655b6e1a0943e481ea341907dd717da500f4",
+    "hmu_recognizers.py": "1561ef38bc29f2a59f3ed3979acd570d1c9b0c161e83b3089a73d5d2dc8213a4",
+    "ocr_helper.py": "bebb18290794ad89bd1f224d3a7a0ab863b67cb339d6d01379d86be09df0caf3"
+  },
+  "profiled": false,
+  "warmup_runs": 1,
+  "runs": 3,
+  "measurements": [
+    {
+      "prepare_seconds": 8.535843799996655,
+      "export_seconds": 4.2676561000116635,
+      "total_seconds": 12.803499900008319,
+      "peak_task_sampled_rss_bytes": 259809280,
+      "output_bytes": 522713
+    },
+    {
+      "prepare_seconds": 7.790590799995698,
+      "export_seconds": 3.729640199977439,
+      "total_seconds": 11.520230999973137,
+      "peak_task_sampled_rss_bytes": 253845504,
+      "output_bytes": 522713
+    },
+    {
+      "prepare_seconds": 8.449663500010502,
+      "export_seconds": 3.8251036999863572,
+      "total_seconds": 12.274767199996859,
+      "peak_task_sampled_rss_bytes": 257511424,
+      "output_bytes": 522713
+    }
+  ],
+  "fixture": {
+    "pages": 2,
+    "kind": "glyph_outline",
+    "clinical_rect": [
+      25,
+      80,
+      575,
+      756
+    ],
+    "name_rect": [
+      72,
+      43,
+      161,
+      58
+    ]
+  },
+  "corpus_sha256": "9eb86683b74bed6c466da49657c036e7011dd2b32fb95811cb43f0991d96b2bd",
+  "ground_truth_checks": {
+    "textless_and_dense": true,
+    "clinical_pixels_exact": true,
+    "name_region_white": true,
+    "no_false_qr_or_signature": true
+  },
+  "median_prepare_seconds": 8.449663500010502,
+  "range_prepare_seconds": [
+    7.790590799995698,
+    8.535843799996655
+  ],
+  "median_export_seconds": 3.8251036999863572,
+  "range_export_seconds": [
+    3.729640199977439,
+    4.2676561000116635
+  ],
+  "median_total_seconds": 12.274767199996859,
+  "range_total_seconds": [
+    11.520230999973137,
+    12.803499900008319
+  ]
+}

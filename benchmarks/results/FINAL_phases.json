@@ -1,0 +1,162 @@
+{
+  "source_dir": "E:\\HMU_Bo_cong_cu_khu_dinh_danh_PDF\\HMU_KhuDinhDanh",
+  "scope": "Instrumented separate diagnostic run. Nested cumulative times overlap; do not add them.",
+  "cases": {
+    "native": {
+      "prepare_seconds": 0.4501833000103943,
+      "export_seconds": 1.0893688999931328,
+      "measurements": {
+        "prepare/extract_case_seeds": {
+          "calls": 1,
+          "cumulative_seconds": 0.002884499990614131
+        },
+        "prepare/Page.get_text": {
+          "calls": 20,
+          "cumulative_seconds": 0.018858199939131737
+        },
+        "prepare/char_map": {
+          "calls": 10,
+          "cumulative_seconds": 0.010890899953665212
+        },
+        "prepare/analyze_hmu_document": {
+          "calls": 1,
+          "cumulative_seconds": 0.03822839999338612
+        },
+        "prepare/sha": {
+          "calls": 2,
+          "cumulative_seconds": 0.0017359999765176326
+        },
+        "prepare/span_rects": {
+          "calls": 20,
+          "cumulative_seconds": 0.004461999953491613
+        },
+        "prepare/Page.get_drawings": {
+          "calls": 10,
+          "cumulative_seconds": 0.0036025001027155668
+        },
+        "prepare/Page.get_pixmap": {
+          "calls": 20,
+          "cumulative_seconds": 0.016744699998525903
+        },
+        "prepare/expand_rects_with_pixel_ink": {
+          "calls": 10,
+          "cumulative_seconds": 0.01707870003883727
+        },
+        "prepare/apply_review_to_page": {
+          "calls": 10,
+          "cumulative_seconds": 0.029444400046486408
+        },
+        "prepare/generate_audit_markdown": {
+          "calls": 1,
+          "cumulative_seconds": 0.08283709999523126
+        },
+        "export/sha": {
+          "calls": 3,
+          "cumulative_seconds": 0.0029997999663464725
+        },
+        "export/Page.get_text": {
+          "calls": 30,
+          "cumulative_seconds": 0.01365300000179559
+        },
+        "export/validate_review": {
+          "calls": 2,
+          "cumulative_seconds": 0.014100000000325963
+        },
+        "export/apply_review_to_page": {
+          "calls": 20,
+          "cumulative_seconds": 0.044236699934117496
+        },
+        "export/Page.get_pixmap": {
+          "calls": 20,
+          "cumulative_seconds": 0.04708120002760552
+        },
+        "export/generate_audit_markdown": {
+          "calls": 1,
+          "cumulative_seconds": 0.08839859999716282
+        }
+      }
+    },
+    "scan": {
+      "prepare_seconds": 2.961067099997308,
+      "export_seconds": 1.2188158999779262,
+      "measurements": {
+        "prepare/extract_case_seeds": {
+          "calls": 1,
+          "cumulative_seconds": 0.0019659000099636614
+        },
+        "prepare/Page.get_text": {
+          "calls": 20,
+          "cumulative_seconds": 0.0038586999580729753
+        },
+        "prepare/Page.get_pixmap": {
+          "calls": 20,
+          "cumulative_seconds": 0.08300599991343915
+        },
+        "prepare/OCR.process_communicate": {
+          "calls": 4,
+          "cumulative_seconds": 1.6456067999824882
+        },
+        "prepare/ocr_pdf_pages": {
+          "calls": 1,
+          "cumulative_seconds": 1.4096637000038754
+        },
+        "prepare/char_map": {
+          "calls": 10,
+          "cumulative_seconds": 0.001963499904377386
+        },
+        "prepare/analyze_hmu_document": {
+          "calls": 1,
+          "cumulative_seconds": 0.01607549999607727
+        },
+        "prepare/sha": {
+          "calls": 2,
+          "cumulative_seconds": 0.009387200028868392
+        },
+        "prepare/span_rects": {
+          "calls": 20,
+          "cumulative_seconds": 0.00329199995030649
+        },
+        "prepare/Page.get_drawings": {
+          "calls": 10,
+          "cumulative_seconds": 0.0008455999486614019
+        },
+        "prepare/expand_rects_with_pixel_ink": {
+          "calls": 10,
+          "cumulative_seconds": 0.014365900016855448
+        },
+        "prepare/apply_review_to_page": {
+          "calls": 10,
+          "cumulative_seconds": 0.11520139998174272
+        },
+        "prepare/generate_audit_markdown": {
+          "calls": 1,
+          "cumulative_seconds": 0.17076580002321862
+        },
+        "export/sha": {
+          "calls": 3,
+          "cumulative_seconds": 0.003700800007209182
+        },
+        "export/Page.get_text": {
+          "calls": 30,
+          "cumulative_seconds": 0.004432199901202694
+        },
+        "export/validate_review": {
+          "calls": 2,
+          "cumulative_seconds": 0.004994799994165078
+        },
+        "export/apply_review_to_page": {
+          "calls": 20,
+          "cumulative_seconds": 0.18252819994813763
+        },
+        "export/Page.get_pixmap": {
+          "calls": 10,
+          "cumulative_seconds": 0.08590000003459863
+        },
+        "export/generate_audit_markdown": {
+          "calls": 1,
+          "cumulative_seconds": 0.18685589998494834
+        }
+      }
+    }
+  }
+}

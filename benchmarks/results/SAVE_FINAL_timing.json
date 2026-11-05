@@ -1,0 +1,17 @@
+{
+  "pages": 150,
+  "warmup_per_method": 1,
+  "scope": "Loopback HTTP save; UI rendering not measured",
+  "before": {
+    "samples": 30,
+    "median_seconds": 0.0698807000007946,
+    "p95_seconds": 0.13326380000216886,
+    "median_request_bytes": 75981.5
+  },
+  "after": {
+    "samples": 30,
+    "median_seconds": 0.023597149993292987,
+    "p95_seconds": 0.03445190002094023,
+    "median_request_bytes": 204.0
+  }
+}
