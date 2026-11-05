@@ -85,8 +85,19 @@ def main():
         process_job(request['job'],ocr_workers=request['ocr_workers'],render_workers=request['render_workers'])
     except Exception as exc:
         import engine
+        from error_pipeline import record_error_event
         row=request['job']
+        root_dir=Path(row['job_dir']).parent.parent
+        err=record_error_event(
+            root_dir,
+            exc,
+            stage='BATCH_WORKER',
+            source_file=row.get('source_name'),
+            job_id=row.get('id'),
+            queue_id=row.get('id'),
+        )
         engine.save_json(Path(row['job_dir'])/f"error_{row['attempt_id']}.json",dict(
+            **err,
             type=type(exc).__name__,message=str(exc),retryable=isinstance(exc,TimeoutError) or getattr(exc,'winerror',None) in {32,33,1450}))
         raise
 

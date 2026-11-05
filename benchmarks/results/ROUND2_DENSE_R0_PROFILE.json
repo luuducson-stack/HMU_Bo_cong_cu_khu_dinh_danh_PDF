@@ -1,0 +1,60 @@
+{
+  "python": "3.12.10",
+  "pymupdf": "1.26.6",
+  "source_dir": "E:\\HMU_Bo_cong_cu_khu_dinh_danh_PDF\\HMU_KhuDinhDanh\\benchmarks\\baseline_source\\round2_R0_20261028",
+  "source_hashes": {
+    "engine.py": "45ebb2f7a065b877411ff07905ca48cbd1ce9cdc07ba555398083cd4b1c6b5d6",
+    "hmu_recognizers.py": "0d4608f287dbf7e96d046593a995d6ea4a909cc95e061d5b75efaef9e1461636",
+    "ocr_helper.py": "628e80d779469ba3804dbdf829f596e604a66f4ad9eaeed69b1f7c776f63b402"
+  },
+  "profiled": true,
+  "warmup_runs": 0,
+  "runs": 1,
+  "measurements": [
+    {
+      "prepare_seconds": 8.602177299995674,
+      "export_seconds": 1.7481346999993548,
+      "total_seconds": 10.350311999995029,
+      "peak_task_sampled_rss_bytes": 239001600,
+      "output_bytes": 522713
+    }
+  ],
+  "fixture": {
+    "pages": 2,
+    "kind": "glyph_outline",
+    "clinical_rect": [
+      25,
+      80,
+      575,
+      756
+    ],
+    "name_rect": [
+      72,
+      43,
+      161,
+      58
+    ]
+  },
+  "corpus_sha256": "9eb86683b74bed6c466da49657c036e7011dd2b32fb95811cb43f0991d96b2bd",
+  "ground_truth_checks": {
+    "textless_and_dense": true,
+    "clinical_pixels_exact": true,
+    "name_region_white": true,
+    "no_false_qr_or_signature": true
+  },
+  "median_prepare_seconds": 8.602177299995674,
+  "range_prepare_seconds": [
+    8.602177299995674,
+    8.602177299995674
+  ],
+  "median_export_seconds": 1.7481346999993548,
+  "range_export_seconds": [
+    1.7481346999993548,
+    1.7481346999993548
+  ],
+  "median_total_seconds": 10.350311999995029,
+  "range_total_seconds": [
+    10.350311999995029,
+    10.350311999995029
+  ]
+}

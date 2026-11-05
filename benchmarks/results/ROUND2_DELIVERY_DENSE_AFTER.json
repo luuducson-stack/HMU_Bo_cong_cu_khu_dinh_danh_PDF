@@ -1,0 +1,88 @@
+{
+  "python": "3.12.10",
+  "pymupdf": "1.26.6",
+  "source_dir": "E:\\HMU_Bo_cong_cu_khu_dinh_danh_PDF\\HMU_KhuDinhDanh",
+  "source_hashes": {
+    "engine.py": "01b0f84a86345c4eabcee9dc4c6c875b789e5e2b01f388e13dffd7f95774aa7b",
+    "hmu_recognizers.py": "bbbd20af8697c1b45915f462c6bd039c031f4679895d1bfb7d825f0df46a7493",
+    "ocr_helper.py": "bebb18290794ad89bd1f224d3a7a0ab863b67cb339d6d01379d86be09df0caf3"
+  },
+  "profiled": false,
+  "warmup_runs": 1,
+  "runs": 5,
+  "measurements": [
+    {
+      "prepare_seconds": 3.84854579999228,
+      "export_seconds": 1.449712300003739,
+      "total_seconds": 5.298258099996019,
+      "peak_task_sampled_rss_bytes": 251088896,
+      "output_bytes": 508239
+    },
+    {
+      "prepare_seconds": 3.6018560000229627,
+      "export_seconds": 1.4998057000047993,
+      "total_seconds": 5.101661700027762,
+      "peak_task_sampled_rss_bytes": 252342272,
+      "output_bytes": 508239
+    },
+    {
+      "prepare_seconds": 3.6333158000197727,
+      "export_seconds": 1.5316945999802556,
+      "total_seconds": 5.165010400000028,
+      "peak_task_sampled_rss_bytes": 244961280,
+      "output_bytes": 508239
+    },
+    {
+      "prepare_seconds": 4.047048000007635,
+      "export_seconds": 1.6544342999986839,
+      "total_seconds": 5.701482300006319,
+      "peak_task_sampled_rss_bytes": 270737408,
+      "output_bytes": 508239
+    },
+    {
+      "prepare_seconds": 3.5442369999946095,
+      "export_seconds": 1.4194226000108756,
+      "total_seconds": 4.963659600005485,
+      "peak_task_sampled_rss_bytes": 268623872,
+      "output_bytes": 508239
+    }
+  ],
+  "fixture": {
+    "pages": 2,
+    "kind": "glyph_outline",
+    "clinical_rect": [
+      25,
+      80,
+      575,
+      756
+    ],
+    "name_rect": [
+      72,
+      43,
+      161,
+      58
+    ]
+  },
+  "corpus_sha256": "9eb86683b74bed6c466da49657c036e7011dd2b32fb95811cb43f0991d96b2bd",
+  "ground_truth_checks": {
+    "textless_and_dense": true,
+    "clinical_pixels_exact": true,
+    "name_region_white": true,
+    "no_false_qr_or_signature": true
+  },
+  "median_prepare_seconds": 3.6333158000197727,
+  "range_prepare_seconds": [
+    3.5442369999946095,
+    4.047048000007635
+  ],
+  "median_export_seconds": 1.4998057000047993,
+  "range_export_seconds": [
+    1.4194226000108756,
+    1.6544342999986839
+  ],
+  "median_total_seconds": 5.165010400000028,
+  "range_total_seconds": [
+    4.963659600005485,
+    5.701482300006319
+  ]
+}

@@ -1,0 +1,74 @@
+{
+  "python": "3.12.10",
+  "pymupdf": "1.26.6",
+  "source_dir": "E:\\HMU_Bo_cong_cu_khu_dinh_danh_PDF\\HMU_KhuDinhDanh",
+  "source_hashes": {
+    "engine.py": "1b367fea995dea752de22d33b14b5df41c487506123f88fc81169ca6f1df6fae",
+    "hmu_recognizers.py": "6ec1d03a38d2b2292143d2ec0cc76ff31a2108906970bac4e005dc1e871d6d32",
+    "ocr_helper.py": "bebb18290794ad89bd1f224d3a7a0ab863b67cb339d6d01379d86be09df0caf3"
+  },
+  "profiled": false,
+  "warmup_runs": 1,
+  "runs": 3,
+  "measurements": [
+    {
+      "prepare_seconds": 10.199449400010053,
+      "export_seconds": 4.182675999996718,
+      "total_seconds": 14.382125400006771,
+      "peak_task_sampled_rss_bytes": 259854336,
+      "output_bytes": 508239
+    },
+    {
+      "prepare_seconds": 9.644641300023068,
+      "export_seconds": 4.203144399973098,
+      "total_seconds": 13.847785699996166,
+      "peak_task_sampled_rss_bytes": 258314240,
+      "output_bytes": 508239
+    },
+    {
+      "prepare_seconds": 9.75093849998666,
+      "export_seconds": 4.21619279999868,
+      "total_seconds": 13.96713129998534,
+      "peak_task_sampled_rss_bytes": 253403136,
+      "output_bytes": 508239
+    }
+  ],
+  "fixture": {
+    "pages": 2,
+    "kind": "glyph_outline",
+    "clinical_rect": [
+      25,
+      80,
+      575,
+      756
+    ],
+    "name_rect": [
+      72,
+      43,
+      161,
+      58
+    ]
+  },
+  "corpus_sha256": "9eb86683b74bed6c466da49657c036e7011dd2b32fb95811cb43f0991d96b2bd",
+  "ground_truth_checks": {
+    "textless_and_dense": true,
+    "clinical_pixels_exact": true,
+    "name_region_white": true,
+    "no_false_qr_or_signature": true
+  },
+  "median_prepare_seconds": 9.75093849998666,
+  "range_prepare_seconds": [
+    9.644641300023068,
+    10.199449400010053
+  ],
+  "median_export_seconds": 4.203144399973098,
+  "range_export_seconds": [
+    4.182675999996718,
+    4.21619279999868
+  ],
+  "median_total_seconds": 13.96713129998534,
+  "range_total_seconds": [
+    13.847785699996166,
+    14.382125400006771
+  ]
+}

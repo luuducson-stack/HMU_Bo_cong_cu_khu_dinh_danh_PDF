@@ -1,0 +1,51 @@
+{
+  "before": "HMU_KhuDinhDanh\\benchmarks\\results\\B0_extended.json",
+  "after": "HMU_KhuDinhDanh\\benchmarks\\results\\B1_extended_initialproof.json",
+  "comparison": "matching corpus; negative change means improvement; includes correctness overhead",
+  "rows": [
+    {
+      "case": "watermark10",
+      "corpus_sha256": "dd2d9413abb84e592436500786974000d2ff13e44139b16af87b378ace617b61",
+      "prepare": {
+        "before_seconds": 17.469657300011022,
+        "after_seconds": 30.314990399987437,
+        "change_percent": 73.52939373326063
+      },
+      "export": {
+        "before_seconds": 1.2745075999991968,
+        "after_seconds": 19.27169349999167,
+        "change_percent": 1412.0893355209348
+      },
+      "total": {
+        "before_seconds": 18.741268100013258,
+        "after_seconds": 49.43954039999517,
+        "change_percent": 163.80040099826644
+      },
+      "before_sampled_task_rss_bytes": 59830272,
+      "after_sampled_task_rss_bytes": 74854400,
+      "memory_change_percent": 25.111248031765587
+    },
+    {
+      "case": "largephoto2",
+      "corpus_sha256": "923083873c75adedfd8006dedbe19579ce9f1526ed7e6b749d26887022d2f4d5",
+      "prepare": {
+        "before_seconds": 2.7523708999797236,
+        "after_seconds": 6.350103499979014,
+        "change_percent": 130.71394556692172
+      },
+      "export": {
+        "before_seconds": 1.535710399999516,
+        "after_seconds": 1.9221567000204232,
+        "change_percent": 25.164008788442715
+      },
+      "total": {
+        "before_seconds": 4.271368999994593,
+        "after_seconds": 8.312542100000428,
+        "change_percent": 94.6107231665293
+      },
+      "before_sampled_task_rss_bytes": 258048000,
+      "after_sampled_task_rss_bytes": 499036160,
+      "memory_change_percent": 93.3888888888889
+    }
+  ]
+}

@@ -1,0 +1,69 @@
+{
+  "python": "3.10.11",
+  "platform": "Windows-10-10.0.26200-SP0",
+  "cpu_count": 8,
+  "pymupdf": "1.26.6",
+  "pypdf": "6.10.0",
+  "source_dir": "E:\\HMU_Bo_cong_cu_khu_dinh_danh_PDF\\HMU_KhuDinhDanh",
+  "runs": 5,
+  "warmup_runs": 1,
+  "source_hashes": {
+    "engine.py": "45ebb2f7a065b877411ff07905ca48cbd1ce9cdc07ba555398083cd4b1c6b5d6",
+    "hmu_recognizers.py": "0d4608f287dbf7e96d046593a995d6ea4a909cc95e061d5b75efaef9e1461636",
+    "ocr_helper.py": "628e80d779469ba3804dbdf829f596e604a66f4ad9eaeed69b1f7c776f63b402"
+  },
+  "workers": null,
+  "memory_scope": "peak_python_rss is cumulative OS peak; peak_task_sampled_rss sums Python and live descendant OCR processes sampled every 100ms",
+  "cases": {
+    "native10": {
+      "pages": 10,
+      "corpus_sha256": "0581cda598a3e14f94e18be738730303ce0902e20c347a10138ad5f747370ca0",
+      "ground_truth_checks": null,
+      "measurements": [
+        {
+          "prepare_seconds": 0.41187860001809895,
+          "export_seconds": 1.0729002000007313,
+          "total_seconds": 1.4847788000188302,
+          "peak_python_rss_bytes": 74252288,
+          "peak_task_sampled_rss_bytes": 56950784,
+          "job_bytes": 815754
+        },
+        {
+          "prepare_seconds": 0.42923020001035184,
+          "export_seconds": 1.0795546000008471,
+          "total_seconds": 1.508784800011199,
+          "peak_python_rss_bytes": 74846208,
+          "peak_task_sampled_rss_bytes": 57659392,
+          "job_bytes": 815754
+        },
+        {
+          "prepare_seconds": 0.4125087000138592,
+          "export_seconds": 1.0803560999920592,
+          "total_seconds": 1.4928648000059184,
+          "peak_python_rss_bytes": 74956800,
+          "peak_task_sampled_rss_bytes": 57769984,
+          "job_bytes": 815754
+        },
+        {
+          "prepare_seconds": 0.4160101000161376,
+          "export_seconds": 1.1015351999958511,
+          "total_seconds": 1.5175453000119887,
+          "peak_python_rss_bytes": 74956800,
+          "peak_task_sampled_rss_bytes": 57593856,
+          "job_bytes": 815754
+        },
+        {
+          "prepare_seconds": 0.4114521999727003,
+          "export_seconds": 1.0562514000048395,
+          "total_seconds": 1.4677035999775399,
+          "peak_python_rss_bytes": 75010048,
+          "peak_task_sampled_rss_bytes": 57880576,
+          "job_bytes": 815754
+        }
+      ],
+      "median_prepare_seconds": 0.4125087000138592,
+      "median_export_seconds": 1.0795546000008471,
+      "median_total_seconds": 1.4928648000059184
+    }
+  }
+}

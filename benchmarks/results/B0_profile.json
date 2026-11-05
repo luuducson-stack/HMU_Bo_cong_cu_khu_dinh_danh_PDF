@@ -1,0 +1,36 @@
+{
+  "python": "3.10.11",
+  "platform": "Windows-10-10.0.26200-SP0",
+  "cpu_count": 8,
+  "pymupdf": "1.26.6",
+  "pypdf": "6.10.0",
+  "source_dir": "E:\\HMU_Bo_cong_cu_khu_dinh_danh_PDF\\HMU_KhuDinhDanh\\benchmarks\\baseline_source",
+  "runs": 1,
+  "warmup_runs": 0,
+  "source_hashes": {
+    "engine.py": "a03e1bdfc05c535af0b675de3e7e187145c4bd4e746d80e41ae486749e55aa9a",
+    "hmu_recognizers.py": "6fd963afdd6319bb7bd31e2ccacc0ee2acb8027cbf09be631cf64754d50a9fff",
+    "ocr_helper.py": "9782cada14df34b7f132457a7bcbb24472cede1c75dd905e57b74f8fcc4e30a7"
+  },
+  "workers": null,
+  "memory_scope": "peak_python_rss is cumulative OS peak; peak_task_sampled_rss sums Python and live descendant OCR processes sampled every 100ms",
+  "cases": {
+    "native10": {
+      "pages": 10,
+      "corpus_sha256": "0581cda598a3e14f94e18be738730303ce0902e20c347a10138ad5f747370ca0",
+      "measurements": [
+        {
+          "prepare_seconds": 0.5288058999867644,
+          "export_seconds": 1.3865770999982487,
+          "total_seconds": 1.9153829999850132,
+          "peak_python_rss_bytes": 73928704,
+          "peak_task_sampled_rss_bytes": 62156800,
+          "job_bytes": 471596
+        }
+      ],
+      "median_prepare_seconds": 0.5288058999867644,
+      "median_export_seconds": 1.3865770999982487,
+      "median_total_seconds": 1.9153829999850132
+    }
+  }
+}

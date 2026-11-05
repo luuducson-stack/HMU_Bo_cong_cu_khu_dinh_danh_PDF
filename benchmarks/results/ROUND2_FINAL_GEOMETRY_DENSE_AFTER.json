@@ -1,0 +1,88 @@
+{
+  "python": "3.12.10",
+  "pymupdf": "1.26.6",
+  "source_dir": "E:\\HMU_Bo_cong_cu_khu_dinh_danh_PDF\\HMU_KhuDinhDanh\\benchmarks\\baseline_source\\round2_final_geometry_keep_age",
+  "source_hashes": {
+    "engine.py": "20bf3e40307ab4bf462624ac068fbcef8fa6ba5de30fb39e9fc9427abbbccccc",
+    "hmu_recognizers.py": "251ab9028250c1105a6aee18e27faf1ec291e01fa0c7cb3695407ebc02055f81",
+    "ocr_helper.py": "bebb18290794ad89bd1f224d3a7a0ab863b67cb339d6d01379d86be09df0caf3"
+  },
+  "profiled": false,
+  "warmup_runs": 1,
+  "runs": 5,
+  "measurements": [
+    {
+      "prepare_seconds": 4.619743900000685,
+      "export_seconds": 1.5568133999986458,
+      "total_seconds": 6.176557299999331,
+      "peak_task_sampled_rss_bytes": 254697472,
+      "output_bytes": 508239
+    },
+    {
+      "prepare_seconds": 4.506212299998879,
+      "export_seconds": 1.6122888999998395,
+      "total_seconds": 6.118501199998718,
+      "peak_task_sampled_rss_bytes": 262164480,
+      "output_bytes": 508239
+    },
+    {
+      "prepare_seconds": 4.461031200000434,
+      "export_seconds": 1.5703229999999166,
+      "total_seconds": 6.031354200000351,
+      "peak_task_sampled_rss_bytes": 264654848,
+      "output_bytes": 508237
+    },
+    {
+      "prepare_seconds": 4.59345200000098,
+      "export_seconds": 1.6294848999987153,
+      "total_seconds": 6.222936899999695,
+      "peak_task_sampled_rss_bytes": 252829696,
+      "output_bytes": 508239
+    },
+    {
+      "prepare_seconds": 4.544851699998617,
+      "export_seconds": 1.5765466000011656,
+      "total_seconds": 6.1213982999997825,
+      "peak_task_sampled_rss_bytes": 257224704,
+      "output_bytes": 508239
+    }
+  ],
+  "fixture": {
+    "pages": 2,
+    "kind": "glyph_outline",
+    "clinical_rect": [
+      25,
+      80,
+      575,
+      756
+    ],
+    "name_rect": [
+      72,
+      43,
+      161,
+      58
+    ]
+  },
+  "corpus_sha256": "9eb86683b74bed6c466da49657c036e7011dd2b32fb95811cb43f0991d96b2bd",
+  "ground_truth_checks": {
+    "textless_and_dense": true,
+    "clinical_pixels_exact": true,
+    "name_region_white": true,
+    "no_false_qr_or_signature": true
+  },
+  "median_prepare_seconds": 4.544851699998617,
+  "range_prepare_seconds": [
+    4.461031200000434,
+    4.619743900000685
+  ],
+  "median_export_seconds": 1.5765466000011656,
+  "range_export_seconds": [
+    1.5568133999986458,
+    1.6294848999987153
+  ],
+  "median_total_seconds": 6.1213982999997825,
+  "range_total_seconds": [
+    6.031354200000351,
+    6.222936899999695
+  ]
+}

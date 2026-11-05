@@ -3,6 +3,7 @@ import argparse, json, re, secrets, threading, time, unicodedata, urllib.parse, 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from delivery import export_reviewed_folder
+from error_pipeline import record_error_event, get_error_report
 import fitz
 from engine import (
     prepare, export, save_json, validate_review, approve_all_pages,
@@ -381,16 +382,17 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
     def set_progress(msg):
         with lock: progress['progress'] = msg
 
-    def run_task(async_mode, work, send):
+    def run_task(async_mode, work, send, stage='EXPORT', source_file=None, job_id=None):
         task_id = secrets.token_hex(16)
-        progress.update(status='running', task_id=task_id, progress='', result=None, error=None)
+        progress.update(status='running', task_id=task_id, progress='', result=None, error=None, error_detail=None)
         def execute():
             try:
                 result = work()
                 with lock: progress.update(status='done', result=result, progress='')
                 return result
             except Exception as exc:
-                with lock: progress.update(status='error', error=str(exc), progress='')
+                err = record_error_event(root, exc, stage=stage, source_file=source_file, job_id=job_id)
+                with lock: progress.update(status='error', error=str(exc), error_detail=err, progress='')
                 if not async_mode: raise
         if async_mode:
             threading.Thread(target=execute, daemon=True).start()
@@ -425,6 +427,8 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                     if path == '/progress':
                         if q.get('task_id', [''])[0] != progress['task_id']: raise Conflict('Unknown or expired task')
                         self.send(200, dict(progress)); return
+                    if path in {'/errors/report', '/errors/report.json'}:
+                        self.send(200, get_error_report(root)); return
                     if path == '/state': self.send(200, {'token':token, **state()}); return
                     if path == '/batch/status':self.send(200,batch_status());return
                     if path in {'/batch/qc','/batch/pdf','/batch/preview'}:
@@ -468,8 +472,12 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                         if out.parent!=generation: raise ValueError('Invalid output path')
                         self.send(200, out.read_bytes(),'application/pdf'); return
                     self.send(404, {'error':'Not found'})
-            except Conflict as exc: self.send(409, {'error':str(exc), 'code':'CONFLICT'})
-            except Exception as exc: self.send(400, {'error':str(exc)})
+            except Conflict as exc:
+                err = record_error_event(root, exc, stage='CONFLICT', http_path=path)
+                self.send(409, {'error':str(exc), 'code':'CONFLICT', 'error_detail': err})
+            except Exception as exc:
+                err = record_error_event(root, exc, stage='HTTP_API', http_path=path)
+                self.send(400, {'error':str(exc), 'error_detail': err})
         def do_POST(self):
             nonlocal active, case_root, active_queue_id
             if not self.host_ok() or self.headers.get('X-HMU-Token') != token:
@@ -543,7 +551,7 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                             with lock:
                                 active=new_active;case_root=new_case;active_queue_id=None;validated_jobs.clear();save_session()
                                 return state()
-                        run_task(async_mode,work_open,self.send);return
+                        run_task(async_mode,work_open,self.send,stage='PREPARE',source_file=original_name or (target.name if target else None));return
                     if active_queue_id:operations.enter_context(batch.review_lock(batch_db,active_queue_id))
                     current=check_identity(json.loads(body));req=json.loads(body);job=active;captured_case=case_root
                     if path=='/select_file':
@@ -592,7 +600,7 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                         destination=req.get('destination')
                         def work_export_folder():
                             return export_reviewed_folder(captured_case or job,destination,internal_root=root,progress_cb=set_progress)
-                        run_task(async_mode,work_export_folder,self.send);return
+                        run_task(async_mode,work_export_folder,self.send,stage='EXPORT');return
                     if path=='/export':
                         if active_queue_id:raise ValueError('Dùng Xuất lại và kiểm PDF hoặc Bàn giao trong hàng đợi')
                         draft=req.get('draft',False);scope=req.get('scope','file')
@@ -605,10 +613,23 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                                 return {**result,'file':Path(result['outputs'][0]).name,'scope':'case','directory':result['output_dir']}
                             out,qc=export(job,draft=draft,progress_cb=set_progress)
                             return {'file':out.name,'qc':qc,'directory':str(out.parent),'scope':'file'}
-                        run_task(async_mode,work_export,self.send);return
+                        run_task(async_mode,work_export,self.send,stage='EXPORT');return
                     self.send(404,{'error':'Not found'})
-            except Conflict as exc:self.send(409,{'error':str(exc),'code':'CONFLICT'})
-            except Exception as exc:self.send(400,{'error':str(exc)})
+            except Conflict as exc:
+                err=record_error_event(root,exc,stage='CONFLICT',http_path=path)
+                self.send(409,{'error':str(exc),'code':'CONFLICT','error_detail':err})
+            except Exception as exc:
+                stg='OPEN_PATH' if path=='/open_path' else ('UPLOAD' if path=='/upload' else 'HTTP_API')
+                src_f=None
+                try:
+                    if path=='/open_path':
+                        r=json.loads(body)
+                        src_f=Path(r.get('path','')).name or None
+                    elif path=='/upload':
+                        src_f=original_name or None
+                except Exception:pass
+                err=record_error_event(root,exc,stage=stg,source_file=src_f,http_path=path)
+                self.send(400,{'error':str(exc),'error_detail':err})
     class LocalServer(ThreadingHTTPServer):
         allow_reuse_address = False
         def server_bind(self):
@@ -624,11 +645,32 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('--job');ap.add_argument('--port',type=int,default=8765)
     ap.add_argument('--root',default='HMU_JOBS');ap.add_argument('--no-browser',action='store_true');args=ap.parse_args()
-    try:server=create_server(Path(args.root),Path(args.job) if args.job else None,args.port)
-    except OSError as exc:raise SystemExit(f'Không mở được cổng {args.port}. Kiểm tra phiên đang chạy hoặc dùng --port khác: {exc}')
+    root_path=Path(args.root)
+    try:server=create_server(root_path,Path(args.job) if args.job else None,args.port)
+    except OSError as exc:
+        record_error_event(root_path,exc,stage='STARTUP')
+        report_file=root_path/'error_report.json'
+        print(f"\n[HMU LỖI] Không mở được cổng {args.port}: {exc}")
+        if report_file.exists():
+            print(f"[HMU BÁO LỖI] Chi tiết lỗi đã ghi tại: {report_file.resolve()}")
+        raise SystemExit(f'Không mở được cổng {args.port}. Kiểm tra phiên đang chạy hoặc dùng --port khác: {exc}')
+    except Exception as exc:
+        record_error_event(root_path,exc,stage='STARTUP')
+        report_file=root_path/'error_report.json'
+        print(f"\n[HMU LỖI] Khởi động thất bại: {exc}")
+        if report_file.exists():
+            print(f"[HMU BÁO LỖI] Chi tiết lỗi đã ghi tại: {report_file.resolve()}")
+        raise
     url=f'http://127.0.0.1:{server.server_port}';print('HMU PDF review: '+url)
     if not args.no_browser:webbrowser.open(url)
     try:server.serve_forever()
-    finally:server.server_close()
+    except KeyboardInterrupt:pass
+    finally:
+        server.server_close()
+        report=get_error_report(root_path)
+        if report.get('total_errors',0)>0:
+            report_file=root_path/'error_report.json'
+            print(f"\n[HMU BÁO LỖI] Phiên làm việc ghi nhận {report['total_errors']} lỗi.")
+            print(f"[HMU BÁO LỖI] Báo cáo chi tiết: {report_file.resolve()}\n")
 
 if __name__=='__main__':main()

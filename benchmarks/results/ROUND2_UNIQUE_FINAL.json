@@ -1,0 +1,60 @@
+{
+  "python": "3.12.10",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "cpu_count": 8,
+  "pymupdf": "1.26.6",
+  "pypdf": "6.10.0",
+  "source_dir": "E:\\HMU_Bo_cong_cu_khu_dinh_danh_PDF\\HMU_KhuDinhDanh",
+  "runs": 3,
+  "warmup_runs": 1,
+  "source_hashes": {
+    "engine.py": "1b367fea995dea752de22d33b14b5df41c487506123f88fc81169ca6f1df6fae",
+    "hmu_recognizers.py": "6ec1d03a38d2b2292143d2ec0cc76ff31a2108906970bac4e005dc1e871d6d32",
+    "ocr_helper.py": "bebb18290794ad89bd1f224d3a7a0ab863b67cb339d6d01379d86be09df0caf3"
+  },
+  "workers": null,
+  "memory_scope": "peak_python_rss is cumulative OS peak; peak_task_sampled_rss sums Python and live descendant OCR processes sampled every 100ms",
+  "cases": {
+    "native_unique50": {
+      "pages": 50,
+      "corpus_sha256": "174120772f21c9ac44f88c3c964a042b6923be70ee9a22e095e904a3485fd8bd",
+      "ground_truth_checks": {
+        "name_regions_white": true,
+        "clinical_region_mean_channel_difference_max": 1.0,
+        "reference": "clean clinical text for watermark; original image pixels for largephoto"
+      },
+      "measurements": [
+        {
+          "prepare_seconds": 6.575692700018408,
+          "export_seconds": 30.060362199990777,
+          "total_seconds": 36.636054900009185,
+          "peak_python_rss_bytes": 120991744,
+          "peak_task_sampled_rss_bytes": 117792768,
+          "job_bytes": 7273831,
+          "output_bytes": 3502319
+        },
+        {
+          "prepare_seconds": 6.855298400012543,
+          "export_seconds": 30.249636299995473,
+          "total_seconds": 37.104934700008016,
+          "peak_python_rss_bytes": 145907712,
+          "peak_task_sampled_rss_bytes": 128192512,
+          "job_bytes": 7273831,
+          "output_bytes": 3502319
+        },
+        {
+          "prepare_seconds": 6.912503300001845,
+          "export_seconds": 30.15358680000645,
+          "total_seconds": 37.066090100008296,
+          "peak_python_rss_bytes": 169631744,
+          "peak_task_sampled_rss_bytes": 151179264,
+          "job_bytes": 7273831,
+          "output_bytes": 3502319
+        }
+      ],
+      "median_prepare_seconds": 6.855298400012543,
+      "median_export_seconds": 30.15358680000645,
+      "median_total_seconds": 37.066090100008296
+    }
+  }
+}

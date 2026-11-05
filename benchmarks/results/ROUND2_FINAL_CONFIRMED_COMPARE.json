@@ -1,0 +1,183 @@
+{
+  "before": "E:\\HMU_Bo_cong_cu_khu_dinh_danh_PDF\\HMU_KhuDinhDanh\\benchmarks\\results\\ROUND2_DELIVERY_BEFORE_FINAL.json",
+  "after": "E:\\HMU_Bo_cong_cu_khu_dinh_danh_PDF\\HMU_KhuDinhDanh\\benchmarks\\results\\ROUND2_FINAL_CONFIRMED_AFTER.json",
+  "comparison": "matching corpus; negative change means improvement; includes correctness overhead",
+  "rows": [
+    {
+      "case": "native10",
+      "corpus_sha256": "0581cda598a3e14f94e18be738730303ce0902e20c347a10138ad5f747370ca0",
+      "prepare": {
+        "before_seconds": 0.5620138999947812,
+        "after_seconds": 0.6410743999986153,
+        "change_percent": 14.067356697862476
+      },
+      "export": {
+        "before_seconds": 1.2892274000041652,
+        "after_seconds": 1.1336157999994612,
+        "change_percent": -12.070143715856595
+      },
+      "total": {
+        "before_seconds": 1.8512412999989465,
+        "after_seconds": 2.0581573999988905,
+        "change_percent": 11.177154485482887
+      },
+      "before_sampled_task_rss_bytes": 64204800,
+      "after_sampled_task_rss_bytes": 64569344,
+      "memory_change_percent": 0.5677830940988837
+    },
+    {
+      "case": "native150",
+      "corpus_sha256": "1a47ec2b33ebea8b674ae68890bfc305494b95213db63a61fec971afa79719bc",
+      "prepare": {
+        "before_seconds": 7.061160100012785,
+        "after_seconds": 8.058875900000203,
+        "change_percent": 14.129630058743636
+      },
+      "export": {
+        "before_seconds": 16.510600500012515,
+        "after_seconds": 11.675593500000105,
+        "change_percent": -29.284258922070983
+      },
+      "total": {
+        "before_seconds": 23.65438940000604,
+        "after_seconds": 19.525216899999577,
+        "change_percent": -17.456263318322673
+      },
+      "before_sampled_task_rss_bytes": 86659072,
+      "after_sampled_task_rss_bytes": 87539712,
+      "memory_change_percent": 1.0162121283735948
+    },
+    {
+      "case": "case50",
+      "corpus_sha256": "f8b8cf6be2029138b94d0cb5f67e77e0702ee180e34aa2cba602d3733d34aa00",
+      "prepare": {
+        "before_seconds": 5.034308400005102,
+        "after_seconds": 6.8013235999987955,
+        "change_percent": 35.09946271849182
+      },
+      "export": {
+        "before_seconds": 15.886040499986848,
+        "after_seconds": 16.00757370000065,
+        "change_percent": 0.7650314124145741
+      },
+      "total": {
+        "before_seconds": 20.97167470000568,
+        "after_seconds": 22.702127500000643,
+        "change_percent": 8.251381087817911
+      },
+      "before_sampled_task_rss_bytes": 80252928,
+      "after_sampled_task_rss_bytes": 82083840,
+      "memory_change_percent": 2.281427040269479
+    },
+    {
+      "case": "vector20",
+      "corpus_sha256": "d9c5504799cd45857a1150ee5210974b08a5d0eb0b05253f71f1e30d32f15e70",
+      "prepare": {
+        "before_seconds": 2.1459287999896333,
+        "after_seconds": 1.7666644000000815,
+        "change_percent": -17.67367118570681
+      },
+      "export": {
+        "before_seconds": 3.5896006999828387,
+        "after_seconds": 1.7143120000000636,
+        "change_percent": -52.24226471740271
+      },
+      "total": {
+        "before_seconds": 5.818922100006603,
+        "after_seconds": 3.442076100000122,
+        "change_percent": -40.8468434386462
+      },
+      "before_sampled_task_rss_bytes": 76279808,
+      "after_sampled_task_rss_bytes": 77213696,
+      "memory_change_percent": 1.2242925414809536
+    },
+    {
+      "case": "watermark10",
+      "corpus_sha256": "dd2d9413abb84e592436500786974000d2ff13e44139b16af87b378ace617b61",
+      "prepare": {
+        "before_seconds": 21.436075199977495,
+        "after_seconds": 23.290433800000756,
+        "change_percent": 8.650644218794334
+      },
+      "export": {
+        "before_seconds": 8.290167700004531,
+        "after_seconds": 5.6332775999999285,
+        "change_percent": -32.04868943728545
+      },
+      "total": {
+        "before_seconds": 29.720841200003633,
+        "after_seconds": 28.923711400000684,
+        "change_percent": -2.682056657275411
+      },
+      "before_sampled_task_rss_bytes": 93683712,
+      "after_sampled_task_rss_bytes": 84750336,
+      "memory_change_percent": -9.535676810073458
+    },
+    {
+      "case": "scan50",
+      "corpus_sha256": "873f7ff0b02abddb1ad5acc708aa3515a610e7344984f4578eebdec9486bcd96",
+      "prepare": {
+        "before_seconds": 10.090901199990185,
+        "after_seconds": 11.472992300001351,
+        "change_percent": 13.696408998757326
+      },
+      "export": {
+        "before_seconds": 6.309224700002233,
+        "after_seconds": 4.068432899999607,
+        "change_percent": -35.51611975401403
+      },
+      "total": {
+        "before_seconds": 16.400125899992418,
+        "after_seconds": 15.475210399999924,
+        "change_percent": -5.639685363591762
+      },
+      "before_sampled_task_rss_bytes": 434290688,
+      "after_sampled_task_rss_bytes": 496050176,
+      "memory_change_percent": 14.220771871581084
+    },
+    {
+      "case": "mixed10",
+      "corpus_sha256": "47284bbfbc06018462eeacde4e2b34834ec5bcede1d0a7f3cadaf5891fe61b3b",
+      "prepare": {
+        "before_seconds": 3.1818502999958582,
+        "after_seconds": 3.8657375999991928,
+        "change_percent": 21.493383896917617
+      },
+      "export": {
+        "before_seconds": 1.396134799986612,
+        "after_seconds": 0.9917872000005445,
+        "change_percent": -28.961931182429158
+      },
+      "total": {
+        "before_seconds": 4.5981391000095755,
+        "after_seconds": 4.867501500000799,
+        "change_percent": 5.858074193333174
+      },
+      "before_sampled_task_rss_bytes": 255787008,
+      "after_sampled_task_rss_bytes": 212963328,
+      "memory_change_percent": -16.74192928516526
+    },
+    {
+      "case": "largephoto2",
+      "corpus_sha256": "923083873c75adedfd8006dedbe19579ce9f1526ed7e6b749d26887022d2f4d5",
+      "prepare": {
+        "before_seconds": 6.938454200018896,
+        "after_seconds": 7.491131000000678,
+        "change_percent": 7.96541685005685
+      },
+      "export": {
+        "before_seconds": 2.0174213999998756,
+        "after_seconds": 1.2996194000006653,
+        "change_percent": -35.58017179748636
+      },
+      "total": {
+        "before_seconds": 8.955875600018771,
+        "after_seconds": 8.728687400000126,
+        "change_percent": -2.5367502873551384
+      },
+      "before_sampled_task_rss_bytes": 512311296,
+      "after_sampled_task_rss_bytes": 506298368,
+      "memory_change_percent": -1.1736863986696044
+    }
+  ]
+}

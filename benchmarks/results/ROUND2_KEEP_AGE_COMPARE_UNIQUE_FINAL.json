@@ -1,0 +1,29 @@
+{
+  "before": "E:\\HMU_Bo_cong_cu_khu_dinh_danh_PDF\\HMU_KhuDinhDanh\\benchmarks\\results\\ROUND2_DELIVERY_UNIQUE_BEFORE.json",
+  "after": "E:\\HMU_Bo_cong_cu_khu_dinh_danh_PDF\\HMU_KhuDinhDanh\\benchmarks\\results\\ROUND2_KEEP_AGE_UNIQUE_AFTER_FINAL.json",
+  "comparison": "matching corpus; negative change means improvement; includes correctness overhead",
+  "rows": [
+    {
+      "case": "native_unique50",
+      "corpus_sha256": "174120772f21c9ac44f88c3c964a042b6923be70ee9a22e095e904a3485fd8bd",
+      "prepare": {
+        "before_seconds": 2.5321869000035804,
+        "after_seconds": 2.8736837000001287,
+        "change_percent": 13.486239897855313
+      },
+      "export": {
+        "before_seconds": 11.778954400011571,
+        "after_seconds": 11.468619499999932,
+        "change_percent": -2.6346557552793914
+      },
+      "total": {
+        "before_seconds": 14.34814610000467,
+        "after_seconds": 14.665344800000184,
+        "change_percent": 2.2107295101728264
+      },
+      "before_sampled_task_rss_bytes": 243851264,
+      "after_sampled_task_rss_bytes": 153165824,
+      "memory_change_percent": -37.18883327174388
+    }
+  ]
+}
