@@ -1,22 +1,22 @@
-# Python virtual environment
-.venv/
-*/.venv/
-venv/
-env/
-
-# Python cache & compiled files
-__pycache__/
-*/__pycache__/
-*.py[cod]
-*$py.class
-
-# Runtime job processing data, scanned PDFs, images, OCR cache
+# Patient data (PHI), job runs, review outputs — never commit
 HMU_JOBS/
-**/HMU_JOBS/
-*.log
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*_private*
+HMU_CASE_*_QC.json
 
-# System & IDE files
-.vscode/
-.idea/
-.DS_Store
-Thumbs.db
+# Environments & caches
+.venv/
+__pycache__/
+*.pyc
+*.tmp
+*.pending
+
+# Frozen benchmark snapshots (archive separately)
+benchmarks/baseline_source/
+benchmarks/results/*.prof
+
+# Agent workspaces
+.superpowers/
