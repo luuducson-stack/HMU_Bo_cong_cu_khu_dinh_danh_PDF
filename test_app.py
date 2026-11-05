@@ -620,5 +620,28 @@ class AppTests(unittest.TestCase):
   self.assertTrue(exp3.get('copied_for_comparison'))
   self.assertEqual(exp3.get('original_directory'), str(target_patient.resolve()))
 
+ def test_windows_batch_files_crlf_and_safe_syntax(self):
+  repo_root = Path(__file__).resolve().parent
+  for bat_name in ('CAI_DAT_WINDOWS.bat', 'MO_CONG_CU.bat'):
+   bat_path = repo_root / bat_name
+   raw = bat_path.read_bytes()
+   self.assertFalse(raw.startswith((b'\xff\xfe', b'\xfe\xff', b'\xef\xbb\xbf')), f'{bat_name} must not have BOM')
+   text = raw.decode('utf-8')
+   crlf_count = raw.count(b'\r\n')
+   lf_only_count = raw.count(b'\n') - crlf_count
+   self.assertGreater(crlf_count, 0, f'{bat_name} must have CRLF line endings')
+   self.assertEqual(lf_only_count, 0, f'{bat_name} must use CRLF on every line for cmd.exe compatibility')
+   for line in text.splitlines():
+    stripped = line.strip()
+    self.assertFalse(
+     stripped.startswith('if ') and stripped.endswith('('),
+     f'{bat_name} must use goto labels instead of parenthesized if-blocks: {stripped}'
+    )
+  for py_path in repo_root.glob('*.py'):
+   raw = py_path.read_bytes()
+   self.assertNotIn(b'\x00', raw, f'{py_path.name} contains null bytes')
+   self.assertFalse(raw.startswith(b'\xff'), f'{py_path.name} starts with 0xFF')
+   raw.decode('utf-8')
+
 
 if __name__=='__main__':unittest.main()
