@@ -153,5 +153,75 @@ let script=fs.readFileSync(__dirname+'/ui/review.js','utf8');script=script.slice
  const errToastsAfterSaveSoon=toastBox.children.filter(t=>t.classList.contains('err'));
  assert.ok(errToastsAfterSaveSoon.length>errCountBeforeSaveSoon,'saveSoon failure must emit .pill-toast.err');
 
+ // Phase 4 Task 4.1: Desktop Workspace UI & Pre-clone & Collision alerts
+ // 1. Test #initWorkspace initializes desktop workspace and auto-fills destination
+ ctx.document.getElementById('workspaceName').value = 'HMU_Dot1_TimMach';
+ const wsCalls = [];
+ ctx.fetch = async (path, opts) => {
+  const body = opts && opts.body ? JSON.parse(opts.body) : {};
+  wsCalls.push({ path, body });
+  if (path === '/workspace/init') {
+   return {
+    ok: true,
+    json: async () => ({
+     workspace_name: 'HMU_Dot1_TimMach',
+     workspace_dir: 'C:/Users/Test/Desktop/HMU_Dot1_TimMach',
+     data_root: 'C:/Users/Test/Desktop/HMU_Dot1_TimMach/Data_Root',
+     data_deidentified: 'C:/Users/Test/Desktop/HMU_Dot1_TimMach/Data_Deidentified'
+    })
+   };
+  }
+  return { ok: true, json: async () => ({}) };
+ };
+ await vm.runInContext("$('initWorkspace').onclick()", ctx);
+ assert.equal(wsCalls[0].path, '/workspace/init');
+ assert.equal(wsCalls[0].body.workspace_name, 'HMU_Dot1_TimMach');
+ assert.equal(elements.get('workspaceDataRoot').textContent, 'C:/Users/Test/Desktop/HMU_Dot1_TimMach/Data_Root');
+ assert.equal(elements.get('workspaceDataDeidentified').textContent, 'C:/Users/Test/Desktop/HMU_Dot1_TimMach/Data_Deidentified');
+ assert.equal(elements.get('folderDestination').value, 'C:/Users/Test/Desktop/HMU_Dot1_TimMach/Data_Deidentified');
+ assert.ok(toastBox.children.some(t => t.textContent.includes('HMU_Dot1_TimMach')), 'initWorkspace must emit a success toast');
+
+ // 2. Test #scanWorkspaceRoot routes to batch queue with Data_Root
+ await vm.runInContext("$('scanWorkspaceRoot').onclick()", ctx);
+ assert.equal(elements.get('batchPaths').value, 'C:/Users/Test/Desktop/HMU_Dot1_TimMach/Data_Root');
+ assert.equal(vm.runInContext('workspaceMode', ctx), 'batch', 'scanWorkspaceRoot must switch to batch mode');
+
+ // 3. Test /open_path returns cloned_folders -> toast notification
+ ctx.fetch = async (path, opts) => {
+  return {
+   ok: true,
+   json: async () => ({
+    review: { job_id: 'case1', revision: 0, pages: [{ page: 1, reviewed: true, manual_rects: [], proposals: [] }], watermarks_removed: [] },
+    files: [{ index: 1, name: 'doc.pdf', job_id: 'case1', pages: 1 }],
+    batch_case: true,
+    cloned_folders: [
+     'C:/Users/Test/Desktop/HMU_Dot1_TimMach/Data_Deidentified/BA001',
+     'C:/Users/Test/Desktop/HMU_Dot1_TimMach/Data_Deidentified/BA002'
+    ]
+   })
+  };
+ };
+ elements.get('localPath').value = 'C:/Users/Test/Desktop/HMU_Dot1_TimMach/Data_Root/BA001';
+ vm.runInContext("flush=async()=>{};dirty=false;setMode('local')", ctx);
+ await vm.runInContext("$('loadPath').onclick()", ctx);
+ assert.ok(toastBox.children.some(t => t.textContent.includes('2 thư mục bệnh án trống')), 'open_path with cloned_folders must emit pill toast');
+
+ // 4. Test /export_folder with copied_for_comparison -> toast notification with comparison alert
+ ctx.fetch = async (path, opts) => {
+  return {
+   ok: true,
+   json: async () => ({
+    directory: 'C:/Users/Test/Desktop/HMU_Dot1_TimMach/Data_Deidentified/BA001_Copy1',
+    count: 1,
+    pending: [],
+    copied_for_comparison: true,
+    original_directory: 'C:/Users/Test/Desktop/HMU_Dot1_TimMach/Data_Deidentified/BA001'
+   })
+  };
+ };
+ vm.runInContext("data={job_id:'case1',revision:0,pages:[{page:1,reviewed:true,manual_rects:[],proposals:[]}],watermarks_removed:[]};exportPromise=exportFolder()", ctx);
+ await vm.runInContext('exportPromise', ctx);
+ assert.ok(toastBox.children.some(t => t.textContent.includes('BA001_Copy1') && t.textContent.includes('đối chiếu')), 'export_folder collision must emit comparison toast');
+
  console.log('Local-path folder UI: visible controls, save/revision, pending alert/open and queue guard PASS');
 })().catch(e=>{console.error(e);process.exitCode=1});

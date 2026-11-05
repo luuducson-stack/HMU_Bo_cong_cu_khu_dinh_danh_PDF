@@ -5,6 +5,21 @@
  <div><span class="brand">HMU</span><h1>Khử định danh PDF</h1></div>
  <span class="local-badge">Chạy trên máy</span>
 </header>
+<section id="workspacePanel" class="panel workspace-panel" aria-labelledby="workspaceHeading">
+ <h2 id="workspaceHeading">Windows 11 Desktop Workspace</h2>
+ <p class="muted">Tự động khởi tạo thư mục <code>Data_Root</code> (đầu vào) và <code>Data_Deidentified</code> (đầu ra) ngoài Desktop.</p>
+ <div class="form-row">
+  <label class="grow">Tên Workspace ngoài Desktop
+   <input id="workspaceName" placeholder="HMU_Dot1_TimMach">
+  </label>
+  <button type="button" id="initWorkspace" class="primary">Tạo / Kết nối Workspace trên Desktop</button>
+  <button type="button" id="scanWorkspaceRoot">Quét toàn bộ Data_Root</button>
+ </div>
+ <div class="workspace-paths muted small" style="margin-top:6px;font-size:13px">
+  <div>📁 <strong>Data_Root (đầu vào):</strong> <span id="workspaceDataRoot">Chưa kết nối</span></div>
+  <div>📁 <strong>Data_Deidentified (đầu ra):</strong> <span id="workspaceDataDeidentified">Chưa kết nối</span></div>
+ </div>
+</section>
 <div class="workspace-switch" role="group" aria-label="Chế độ làm việc">
  <button id="localMode" aria-pressed="true">Ca đang mở</button>
  <button id="batchMode" aria-pressed="false">Hàng đợi</button>

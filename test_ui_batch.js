@@ -93,5 +93,54 @@ const sent=[];vm.runInContext('loadBatchQcOriginal=loadBatchQc',ctx);ctx.fetch=a
  await vm.runInContext("refreshBatch()",ctx);
  assert.equal(errToasts().length,countBeforeFailedPoll+2,'refreshBatch must emit new toast when updated timestamp changes');
 
+ // Phase 4 Task 4.1: Batch pre-clone toasts & release collision comparison toasts & state workspace
+ // 1. Batch enqueue returns cloned_folders -> pill toast
+ ctx.fetch = async (path, opts) => {
+   if (path === '/batch/status') return { ok: true, json: async () => ({ jobs: [], coordinator: {} }) };
+   return {
+     ok: true,
+     json: async () => ({
+       added: 3,
+       cloned_folders: [
+         'C:/Users/Test/Desktop/HMU_Dot1/Data_Deidentified/BN01',
+         'C:/Users/Test/Desktop/HMU_Dot1/Data_Deidentified/BN02',
+         'C:/Users/Test/Desktop/HMU_Dot1/Data_Deidentified/BN03'
+       ]
+     })
+   };
+ };
+ await vm.runInContext("batchAction('/batch/enqueue', {paths: ['C:/Users/Test/Desktop/HMU_Dot1/Data_Root']})", ctx);
+ assert.ok(toastBox.children.some(t => t.textContent.includes('3 thư mục bệnh án trống')), 'batch enqueue with cloned_folders must emit pill toast');
+
+ // 2. Batch release_folder returns comparisons -> pill toast for comparisons
+ ctx.fetch = async (path, opts) => {
+   if (path === '/batch/status') return { ok: true, json: async () => ({ jobs: [], coordinator: {} }) };
+   return {
+     ok: true,
+     json: async () => ({
+       directory: 'C:/Users/Test/Desktop/HMU_Dot1/Data_Deidentified',
+       exported: [{ id: 'q1', output: 'C:/Users/Test/Desktop/HMU_Dot1/Data_Deidentified/BN01_Copy1/to_bia.pdf' }],
+       pending: [],
+       comparisons: [
+         {
+           source_folder: 'BN01',
+           target_folder: 'C:/Users/Test/Desktop/HMU_Dot1/Data_Deidentified/BN01_Copy1',
+           copied_from: 'C:/Users/Test/Desktop/HMU_Dot1/Data_Deidentified/BN01'
+         }
+       ]
+     })
+   };
+ };
+ vm.runInContext("flush=async()=>{};dirty=false;workspaceMode='batch';$('batchPaths').value='C:/Users/Test/Desktop/HMU_Dot1/Data_Root';$('folderDestination').value='C:/Users/Test/Desktop/HMU_Dot1/Data_Deidentified'", ctx);
+ await vm.runInContext("exportFolder()", ctx);
+ assert.ok(toastBox.children.some(t => t.textContent.includes('BN01_Copy1') && t.textContent.includes('đối chiếu')), 'batch release collision comparisons must emit comparison toast');
+
+ // 3. Test applyWorkspace updates UI and folderDestination
+ vm.runInContext("applyWorkspace({workspace_name:'HMU_State_Ws',data_root:'C:/Ws/Data_Root',data_deidentified:'C:/Ws/Data_Deidentified'})", ctx);
+ assert.equal(elements.get('workspaceName').value, 'HMU_State_Ws');
+ assert.equal(elements.get('workspaceDataRoot').textContent, 'C:/Ws/Data_Root');
+ assert.equal(elements.get('workspaceDataDeidentified').textContent, 'C:/Ws/Data_Deidentified');
+ assert.equal(elements.get('folderDestination').value, 'C:/Ws/Data_Deidentified');
+
  console.log('Batch UI save-before-switch and stale-QC guards: PASS');
 })().catch(e=>{console.error(e);process.exitCode=1});

@@ -186,5 +186,148 @@ class BatchTests(unittest.TestCase):
         self.assertEqual(ocr.call_args.kwargs['max_workers'],2)
         self.assertEqual(render.call_args.kwargs['max_workers'],1)
 
+    def test_preclone_folders_on_enqueue_and_schema_migration(self):
+        import sqlite3
+        import delivery
+
+        data_root = self.root / 'Data_Root'
+        data_deidentified = self.root / 'Data_Deidentified'
+        ba1_dir = data_root / 'BA001_NguyenVanA'
+        ba2_dir = data_root / 'BA002_TranThiB'
+        ba1_dir.mkdir(parents=True, exist_ok=True)
+        ba2_dir.mkdir(parents=True, exist_ok=True)
+
+        to_bia = ba1_dir / 'to_bia.pdf'
+        xet_nghiem = ba2_dir / 'xet_nghiem.pdf'
+        with fitz.open() as d:
+            d.new_page().insert_text((50, 50), "Benh an BA001")
+            d.save(to_bia)
+        with fitz.open() as d:
+            d.new_page().insert_text((50, 50), "Benh an BA002")
+            d.save(xet_nghiem)
+
+        # 1. Test delivery.preclone_patient_folders
+        clone_info = delivery.preclone_patient_folders([data_root], data_deidentified, data_root=data_root)
+        self.assertIn('cloned_folders', clone_info)
+        self.assertTrue((data_deidentified / 'BA001_NguyenVanA').is_dir())
+        self.assertTrue((data_deidentified / 'BA002_TranThiB').is_dir())
+        self.assertEqual(len(list((data_deidentified / 'BA001_NguyenVanA').iterdir())), 0)
+        self.assertEqual(len(list((data_deidentified / 'BA002_TranThiB').iterdir())), 0)
+
+        # Check mapping
+        self.assertEqual(clone_info[str(to_bia.resolve())], str((data_deidentified / 'BA001_NguyenVanA').resolve()))
+        self.assertEqual(clone_info[str(xet_nghiem.resolve())], str((data_deidentified / 'BA002_TranThiB').resolve()))
+
+        # 2. Test batch.enqueue with target_folders
+        ids = self.batch.enqueue(self.db, [to_bia, xet_nghiem], target_folders=clone_info.get('mappings', clone_info))
+        self.assertEqual(len(ids), 2)
+
+        # Verify target_folder in sqlite jobs table
+        with sqlite3.connect(self.db) as con:
+            con.row_factory = sqlite3.Row
+            row1 = con.execute("SELECT target_folder FROM jobs WHERE source_path=?", (str(to_bia.resolve()),)).fetchone()
+            self.assertIsNotNone(row1)
+            self.assertEqual(row1['target_folder'], str((data_deidentified / 'BA001_NguyenVanA').resolve()))
+
+            row2 = con.execute("SELECT target_folder FROM jobs WHERE source_path=?", (str(xet_nghiem.resolve()),)).fetchone()
+            self.assertIsNotNone(row2)
+            self.assertEqual(row2['target_folder'], str((data_deidentified / 'BA002_TranThiB').resolve()))
+
+        # 3. Test schema migration on legacy database without target_folder column
+        legacy_db = self.root / 'legacy' / 'queue.sqlite3'
+        legacy_db.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(legacy_db) as con:
+            con.execute('''CREATE TABLE jobs (
+                id TEXT PRIMARY KEY, source_path TEXT NOT NULL, source_name TEXT NOT NULL,
+                source_sha256 TEXT NOT NULL, pages INTEGER NOT NULL, state TEXT NOT NULL,
+                job_dir TEXT NOT NULL, duplicate_of TEXT, revision INTEGER NOT NULL DEFAULT 0,
+                attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '',
+                created REAL NOT NULL, updated REAL NOT NULL, result_json TEXT NOT NULL DEFAULT '{}',
+                UNIQUE(source_path, source_sha256))''')
+            con.commit()
+
+        # Enqueue into legacy_db should auto migrate
+        legacy_ids = self.batch.enqueue(legacy_db, [to_bia], target_folders={str(to_bia.resolve()): str(data_deidentified / 'BA001_NguyenVanA')})
+        self.assertEqual(len(legacy_ids), 1)
+        job = self.batch.get_job(legacy_db, legacy_ids[0])
+        self.assertEqual(job.get('target_folder'), str((data_deidentified / 'BA001_NguyenVanA').resolve()))
+
+    def test_release_folder_routes_to_cloned_patient_folders_without_mixing_and_handles_collision(self):
+        import json, fitz, batch_worker, engine, delivery
+        from unittest.mock import patch
+
+        data_root = self.root / 'Test_Data_Root'
+        data_deid = self.root / 'Test_Data_Deidentified'
+        ba1 = data_root / 'BN_01'
+        ba2 = data_root / 'BN_02'
+        ba1.mkdir(parents=True, exist_ok=True)
+        ba2.mkdir(parents=True, exist_ok=True)
+
+        to_bia_1 = ba1 / 'to_bia.pdf'
+        to_bia_2 = ba2 / 'to_bia.pdf'
+        with fitz.open() as d:
+            d.new_page().insert_text((50, 50), "Benh nhan so 1")
+            d.save(to_bia_1)
+        with fitz.open() as d:
+            d.new_page().insert_text((50, 50), "Benh nhan so 2")
+            d.save(to_bia_2)
+
+        # 1. Pre-clone
+        clone_res = delivery.preclone_patient_folders([data_root], data_deid, data_root=data_root)
+        self.assertTrue((data_deid / 'BN_01').is_dir())
+        self.assertTrue((data_deid / 'BN_02').is_dir())
+        self.assertEqual(len(list((data_deid / 'BN_01').iterdir())), 0)
+        self.assertEqual(len(list((data_deid / 'BN_02').iterdir())), 0)
+
+        # 2. Enqueue
+        ids = self.batch.enqueue(self.db, [to_bia_1, to_bia_2], target_folders=clone_res['mappings'])
+
+        # 3. Process jobs
+        for ident, text in [(ids[0], "Benh nhan so 1"), (ids[1], "Benh nhan so 2")]:
+            row = self.batch.claim_next(self.db)
+            self.assertEqual(row['id'], ident)
+            with patch('output_qc.ocr_pdf_pages', return_value={1: (text, [])}):
+                res = batch_worker.process_job(row, ocr_workers=1, render_workers=1)
+            self.batch.finish_worker(self.db, ident, res)
+            engine.approve_all_pages(Path(row['job_dir']) / 'review')
+
+        # 4. Xuất hàng loạt lần 1
+        out = self.batch.release_folder(self.db, [str(data_root)], data_deid)
+        self.assertEqual(len(out['exported']), 2)
+        self.assertEqual(out['pending'], [])
+
+        # Kiểm tra file đổ đúng folder đã clone, KHÔNG trộn lẫn, KHÔNG có subfolder hex id
+        out_ba1 = data_deid / 'BN_01' / 'to_bia.pdf'
+        out_ba2 = data_deid / 'BN_02' / 'to_bia.pdf'
+        self.assertTrue(out_ba1.is_file())
+        self.assertTrue(out_ba2.is_file())
+
+        # Kiểm tra manifest và qc riêng của từng bệnh án
+        self.assertTrue((data_deid / 'BN_01' / 'manifest.json').is_file())
+        self.assertTrue((data_deid / 'BN_01' / 'qc.json').is_file())
+        self.assertTrue((data_deid / 'BN_02' / 'manifest.json').is_file())
+        self.assertTrue((data_deid / 'BN_02' / 'qc.json').is_file())
+
+        m1 = json.loads((data_deid / 'BN_01' / 'manifest.json').read_text(encoding='utf-8'))
+        m2 = json.loads((data_deid / 'BN_02' / 'manifest.json').read_text(encoding='utf-8'))
+        self.assertEqual(len(m1['files']), 1)
+        self.assertEqual(len(m2['files']), 1)
+        self.assertEqual(m1['files'][0]['file'], 'to_bia.pdf')
+        self.assertEqual(m2['files'][0]['file'], 'to_bia.pdf')
+        self.assertNotEqual(m1['files'][0]['output_hash'], m2['files'][0]['output_hash'])
+
+        # 5. Xuất hàng loạt lần 2 -> tạo bản sao _Copy1 cho cả 2 folder bệnh án
+        out2 = self.batch.release_folder(self.db, [str(data_root)], data_deid)
+        self.assertEqual(len(out2['exported']), 2)
+        self.assertTrue(len(out2.get('comparisons', [])) >= 2)
+
+        out_ba1_copy = data_deid / 'BN_01_Copy1' / 'to_bia.pdf'
+        out_ba2_copy = data_deid / 'BN_02_Copy1' / 'to_bia.pdf'
+        self.assertTrue(out_ba1_copy.is_file())
+        self.assertTrue(out_ba2_copy.is_file())
+        # Bản cũ vẫn nguyên vẹn
+        self.assertTrue(out_ba1.is_file())
+        self.assertTrue(out_ba2.is_file())
+
 
 if __name__=='__main__':unittest.main()
