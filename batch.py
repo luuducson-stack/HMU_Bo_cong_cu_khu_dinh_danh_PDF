@@ -57,8 +57,12 @@ def _ensure_schema(path: Path) -> None:
             job_dir TEXT NOT NULL, duplicate_of TEXT, revision INTEGER NOT NULL DEFAULT 0,
             attempts INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '',
             created REAL NOT NULL, updated REAL NOT NULL, result_json TEXT NOT NULL DEFAULT '{}',
+            target_folder TEXT NOT NULL DEFAULT '',
             UNIQUE(source_path, source_sha256))''')
         con.execute('CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+        cols = [col[1] for col in con.execute("PRAGMA table_info(jobs)").fetchall()]
+        if 'target_folder' not in cols:
+            con.execute("ALTER TABLE jobs ADD COLUMN target_folder TEXT NOT NULL DEFAULT ''")
         con.commit()
     finally:
         con.close()
@@ -122,16 +126,21 @@ def discover_sources(root):
     return result
 
 
-def enqueue(db_path: Path, sources: list[Path]) -> list[str]:
+def enqueue(db_path: Path, sources: list[Path], *, target_folders: dict | list | None = None) -> list[str]:
     import fitz
     root = Path(db_path).resolve().parent
     ids = []
-    for value in sources:
+    for i, value in enumerate(sources):
         source = Path(value).resolve(strict=True)
         if not source.is_file() or source.suffix.lower() != '.pdf':
             raise ValueError('Input must be a PDF file')
         if source.is_relative_to(root):
             raise ValueError('Do not enqueue queue data or output')
+        target_folder = ''
+        if isinstance(target_folders, dict):
+            target_folder = str(target_folders.get(str(source)) or target_folders.get(source) or '')
+        elif isinstance(target_folders, (list, tuple)) and i < len(target_folders):
+            target_folder = str(target_folders[i] or '')
         digest = _sha(source)
         pages = 0
         error = ''
@@ -152,10 +161,12 @@ def enqueue(db_path: Path, sources: list[Path]) -> list[str]:
                 category='FILE_ERROR',
             )
         with _db(db_path) as con:
-            old = con.execute('SELECT id,state FROM jobs WHERE source_path=? AND source_sha256=?', (str(source), digest)).fetchone()
+            old = con.execute('SELECT id,state,target_folder FROM jobs WHERE source_path=? AND source_sha256=?', (str(source), digest)).fetchone()
             if old:
                 if old['state'] == 'DELETING':
                     raise ValueError('Mục đang xóa; hoàn tất xóa trước khi thêm lại nguồn')
+                if target_folder and old['target_folder'] != target_folder:
+                    con.execute('UPDATE jobs SET target_folder=? WHERE id=?', (target_folder, old['id']))
                 ids.append(old['id'])
                 continue
             duplicate = con.execute(
@@ -167,10 +178,10 @@ def enqueue(db_path: Path, sources: list[Path]) -> list[str]:
             state = 'FAILED' if error else ('DUPLICATE' if duplicate else 'QUEUED')
             con.execute(
                 '''INSERT INTO jobs
-                (id,source_path,source_name,source_sha256,pages,state,job_dir,duplicate_of,error,created,updated)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
+                (id,source_path,source_name,source_sha256,pages,state,job_dir,duplicate_of,error,created,updated,target_folder)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
                 (ident, str(source), source.name, digest, pages, state, str(root / 'jobs' / ident),
-                 duplicate['id'] if duplicate else None, error, now, now),
+                 duplicate['id'] if duplicate else None, error, now, now, target_folder),
             )
             ids.append(ident)
     return ids
@@ -187,7 +198,7 @@ def get_job(db_path: Path, job_id: str) -> dict:
 
 
 _SUMMARY_FIELDS = '''id,source_path,source_name,source_sha256,pages,state,job_dir,duplicate_of,
-    revision,attempts,error,created,updated,
+    revision,attempts,error,created,updated,target_folder,
     json_object('output',json_extract(result_json,'$.output'),
       'machine_seconds',json_extract(result_json,'$.machine_seconds'),
       'verification',json_object('status',json_extract(result_json,'$.verification.status'),
@@ -819,27 +830,51 @@ def _mark_released(con, row, released):
 
 def release_job(db_path: Path, job_id: str, *, expected_revision: int, destination: Path) -> dict:
     import engine
-    from delivery import source_pdf_name
+    from delivery import source_pdf_name, resolve_target_folder_with_copy
     with review_lock(db_path, job_id) as row:
         pdf, manifest, report = _approved_output(row, expected_revision)
         destination = Path(destination).resolve()
         destination.mkdir(parents=True, exist_ok=True)
         if destination.is_relative_to((Path(row['job_dir']) / 'review').resolve()):
             raise ValueError('Không bàn giao vào cache nội bộ')
-        folder = destination / f"{job_id}_r{expected_revision}_{manifest['output_hash'][:12]}_named"
         filename = source_pdf_name(row['source_name'])
-        if folder.exists():
-            if json.loads((folder / 'manifest.json').read_text(encoding='utf8')) != manifest or _sha(folder / filename) != manifest['output_hash']:
-                raise ValueError('Bản bàn giao hiện có không khớp; không ghi đè')
+        if row.get('target_folder'):
+            target_f = Path(row['target_folder'])
+            folder_name = target_f.name
+            target_folder, _, _ = resolve_target_folder_with_copy(destination, folder_name, [filename])
+            folder = target_folder
         else:
-            staging = destination / f'.pending_{job_id}_{secrets.token_hex(8)}'
-            staging.mkdir()
+            folder = destination / f"{job_id}_r{expected_revision}_{manifest['output_hash'][:12]}_named"
+
+        if folder.exists() and (folder / filename).exists():
+            try:
+                if json.loads((folder / 'manifest.json').read_text(encoding='utf8')) == manifest and _sha(folder / filename) == manifest['output_hash']:
+                    released = dict(directory=str(folder), output=str(folder / filename), revision=expected_revision)
+                    with _db(db_path) as con:
+                        _mark_released(con, row, released)
+                    return released
+            except Exception:
+                pass
+            if not row.get('target_folder'):
+                raise ValueError('Bản bàn giao hiện có không khớp; không ghi đè')
+
+        staging = destination / f'.pending_{job_id}_{secrets.token_hex(8)}'
+        staging.mkdir(parents=True, exist_ok=True)
+        try:
             shutil.copyfile(pdf, staging / filename)
             if _sha(staging / filename) != manifest['output_hash']:
                 raise ValueError('Output copy hash mismatch')
             engine.save_json(staging / 'manifest.json', manifest)
             engine.save_json(staging / 'qc.json', report)
+            if folder.exists():
+                try:
+                    folder.rmdir()
+                except OSError:
+                    pass
             staging.rename(folder)
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging)
         released = dict(directory=str(folder), output=str(folder / filename), revision=expected_revision)
         with _db(db_path) as con:
             _mark_released(con, row, released)
@@ -849,7 +884,7 @@ def release_job(db_path: Path, job_id: str, *, expected_revision: int, destinati
 def release_folder(db_path, paths, destination):
     import engine
     from collections import Counter
-    from delivery import publish_folder, source_pdf_name
+    from delivery import source_pdf_name, resolve_target_folder_with_copy
     if (not isinstance(paths, list) or not 1 <= len(paths) <= QueueLimits.MAX_BULK_ITEMS
             or any(not isinstance(p, str) or not p.strip().strip('"') for p in paths)):
         raise ValueError('Nhập đường dẫn PDF/thư mục cần xuất')
@@ -872,7 +907,10 @@ def release_folder(db_path, paths, destination):
     pending = []
     approved = []
     exported = []
-    folder = None
+    comparisons = []
+    released_info = {}
+    target_folders_created = []
+
     with ExitStack() as locks:
         for candidate in rows:
             try:
@@ -892,27 +930,96 @@ def release_folder(db_path, paths, destination):
                 approved.append((row, pdf, manifest, report, name))
             except (OSError, ValueError, RuntimeError, KeyError) as exc:
                 pending.append(dict(id=candidate['id'], source_name=candidate['source_name'], reason=str(exc)))
+
         if approved:
-            names = Counter(name.casefold() for _, _, _, _, name in approved)
-            with publish_folder(dest) as (staging, folder):
-                manifests = []
-                reports = []
-                for row, pdf, manifest, report, name in approved:
-                    relative = Path(row['id'], name) if names[name.casefold()] > 1 else Path(name)
-                    target = staging / relative
-                    target.parent.mkdir(exist_ok=True)
-                    shutil.copyfile(pdf, target)
-                    if _sha(target) != manifest['output_hash']:
-                        raise ValueError('Output copy hash mismatch')
-                    manifests.append({**manifest, 'file': relative.as_posix()})
-                    reports.append({**report, 'case_id': manifest['case_id']})
-                    exported.append(dict(id=row['id'], output=str(folder / relative)))
-                engine.save_json(staging / 'manifest.json', dict(files=manifests))
-                engine.save_json(staging / 'qc.json', dict(files=reports))
+            groups = {}
+            for item in approved:
+                row, pdf, manifest, report, name = item
+                if row.get('target_folder'):
+                    p_name = Path(row['target_folder']).name
+                else:
+                    src = Path(row['source_path']).resolve()
+                    p_name = None
+                    for p, directory in scopes:
+                        if directory and src.is_relative_to(p):
+                            rel = src.relative_to(p)
+                            if len(rel.parts) > 1:
+                                p_name = rel.parts[0]
+                                break
+                            else:
+                                p_name = p.name
+                                break
+                        elif not directory and src == p:
+                            p_name = p.parent.name
+                            break
+                    if not p_name:
+                        p_name = src.parent.name
+                groups.setdefault(p_name, []).append(item)
+
+            for group_name, group_items in groups.items():
+                expected_names = [name for _, _, _, _, name in group_items]
+                name_counts = Counter(name.casefold() for _, _, _, _, name in group_items)
+                target_folder, copied, copied_from = resolve_target_folder_with_copy(dest, group_name, expected_names)
+                if copied:
+                    comparisons.append({
+                        "source_folder": group_name,
+                        "target_folder": str(target_folder),
+                        "copied_from": copied_from,
+                    })
+
+                staging_parent = target_folder.parent
+                staging_parent.mkdir(parents=True, exist_ok=True)
+                staging = staging_parent / f".pending_{target_folder.name}_{secrets.token_hex(6)}"
+                staging.mkdir(parents=True, exist_ok=True)
+                try:
+                    group_manifests = []
+                    group_reports = []
+                    group_exported = []
+                    for row, pdf, manifest, report, name in group_items:
+                        rel_path = Path(row['id'], name) if name_counts[name.casefold()] > 1 else Path(name)
+                        target_file = staging / rel_path
+                        target_file.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(pdf, target_file)
+                        if _sha(target_file) != manifest['output_hash']:
+                            raise ValueError('Output copy hash mismatch')
+                        group_manifests.append({**manifest, 'file': rel_path.as_posix()})
+                        group_reports.append({**report, 'case_id': manifest['case_id']})
+                        group_exported.append((row, manifest, target_folder / rel_path))
+
+                    engine.save_json(staging / 'manifest.json', dict(files=group_manifests))
+                    engine.save_json(staging / 'qc.json', dict(files=group_reports))
+
+                    if target_folder.exists():
+                        try:
+                            target_folder.rmdir()
+                        except OSError:
+                            pass
+                    staging.rename(target_folder)
+
+                    for row, manifest, out_p in group_exported:
+                        exported.append(dict(id=row['id'], output=str(out_p)))
+                        released_info[row['id']] = dict(
+                            directory=str(target_folder),
+                            output=str(out_p),
+                            revision=manifest['revision'],
+                        )
+                    target_folders_created.append(target_folder)
+                finally:
+                    if (staging.exists() and staging.resolve().parent == staging_parent
+                            and not staging.is_symlink() and not staging.is_junction()):
+                        shutil.rmtree(staging)
+
             with _db(db_path) as con:
-                for (row, _, manifest, _, _), item in zip(approved, exported):
-                    _mark_released(con, row, dict(directory=str(folder), output=item['output'], revision=manifest['revision']))
-    return dict(directory=str(folder) if folder else None, exported=exported, pending=pending)
+                for row, _, manifest, _, _ in approved:
+                    _mark_released(con, row, released_info[row['id']])
+
+    folder = target_folders_created[0] if len(target_folders_created) == 1 else (dest if target_folders_created else None)
+    return dict(
+        directory=str(folder) if folder else None,
+        exported=exported,
+        pending=pending,
+        comparisons=comparisons,
+    )
 
 
 def main():

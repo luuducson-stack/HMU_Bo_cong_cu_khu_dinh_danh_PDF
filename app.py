@@ -2,7 +2,10 @@
 import argparse, json, re, secrets, threading, time, unicodedata, urllib.parse, webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from delivery import export_reviewed_folder
+from delivery import (
+    export_reviewed_folder, init_desktop_workspace, get_workspace_config,
+    open_in_explorer, resolve_desktop_path, preclone_patient_folders
+)
 from error_pipeline import record_error_event, get_error_report
 import fitz
 from engine import (
@@ -223,9 +226,29 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
         if path=='/batch/enqueue':
             paths=req.get('paths')
             if not isinstance(paths,list) or not 1<=len(paths)<=2000 or any(not isinstance(p,str) for p in paths):raise ValueError('Nhập danh sách đường dẫn PDF hoặc thư mục')
+            raw_input_paths = [Path(p.strip().strip('"')) for p in paths]
             sources=[]
-            for p in paths:sources.extend(batch.discover_sources(Path(p.strip().strip('"'))))
-            return {'ids':batch.enqueue(batch_db,sources)}
+            for p in raw_input_paths:sources.extend(batch.discover_sources(p))
+
+            ws_cfg = get_workspace_config(root)
+            dest_root = None
+            data_root = None
+            if req.get('destination'):
+                dest_root = Path(str(req['destination']).strip().strip('"'))
+            elif ws_cfg and ws_cfg.get('data_deidentified'):
+                dest_root = Path(ws_cfg['data_deidentified'])
+                if ws_cfg.get('data_root'):
+                    data_root = Path(ws_cfg['data_root'])
+
+            cloned_folders = []
+            target_folders = {}
+            if dest_root:
+                preclone_res = preclone_patient_folders(raw_input_paths, dest_root, data_root=data_root)
+                cloned_folders = preclone_res.get('cloned_folders', [])
+                target_folders = preclone_res.get('mappings', {})
+
+            ids = batch.enqueue(batch_db, sources, target_folders=target_folders)
+            return {'ids': ids, 'cloned_folders': cloned_folders}
         if path=='/batch/pause':batch.pause_queue(batch_db);return {'paused':True}
         if path=='/batch/resume':
             batch.resume_queue(batch_db)
@@ -365,7 +388,7 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                 sub = read_review(job)
                 files.append({'index': item['index'], 'name': item['source_name'], 'job_id': sub['job_id'],
                               'reviewed': sum(bool(p['reviewed']) for p in sub['pages']), 'pages': len(sub['pages'])})
-        return {'review': d, 'files': files, 'batch_case': bool(case_root),'queue_id':active_queue_id}
+        return {'review': d, 'files': files, 'batch_case': bool(case_root),'queue_id':active_queue_id, 'workspace': get_workspace_config(root)}
 
     def check_identity(req):
         if not active:
@@ -430,6 +453,14 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                     if path in {'/errors/report', '/errors/report.json'}:
                         self.send(200, get_error_report(root)); return
                     if path == '/state': self.send(200, {'token':token, **state()}); return
+                    if path == '/workspace/state': self.send(200, get_workspace_config(root) or {}); return
+                    if path == '/workspace/open_explorer':
+                        ws_cfg = get_workspace_config(root)
+                        if not ws_cfg: raise ValueError('Chưa khởi tạo workspace')
+                        target_key = q.get('target', ['workspace'])[0]
+                        t_path = Path(ws_cfg['data_root']) if target_key == 'data_root' else (Path(ws_cfg['data_deidentified']) if target_key == 'data_deidentified' else Path(ws_cfg['workspace_dir']))
+                        open_in_explorer(t_path)
+                        self.send(200, {'status': 'ok', 'opened': str(t_path)}); return
                     if path == '/batch/status':self.send(200,batch_status());return
                     if path in {'/batch/qc','/batch/pdf','/batch/preview'}:
                         row=batch.get_job(batch_db,q.get('queue_id',[''])[0])
@@ -508,6 +539,20 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                         else:
                             self.send(200, {'path': None, 'cancelled': True})
                         return
+                    if path == '/workspace/init':
+                        req = json.loads(body) if body else {}
+                        ws_name = req.get('workspace_name', '')
+                        d_base = req.get('desktop_base')
+                        cfg = init_desktop_workspace(ws_name, internal_root=root, desktop_base=d_base)
+                        self.send(200, cfg); return
+                    if path == '/workspace/open_explorer':
+                        req = json.loads(body) if body else {}
+                        ws_cfg = get_workspace_config(root)
+                        if not ws_cfg: raise ValueError('Chưa khởi tạo workspace')
+                        target_key = req.get('target', 'workspace')
+                        t_path = Path(ws_cfg['data_root']) if target_key == 'data_root' else (Path(ws_cfg['data_deidentified']) if target_key == 'data_deidentified' else Path(ws_cfg['workspace_dir']))
+                        open_in_explorer(t_path)
+                        self.send(200, {'status': 'ok', 'opened': str(t_path)}); return
                     if path.startswith('/batch/'):
                         if path=='/batch/open_job' and progress['status']=='running':raise Conflict('Đợi thao tác hiện tại hoàn tất trước khi chuyển file')
                         self.send(200,batch_post(path,json.loads(body)));return
@@ -526,6 +571,23 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                             target=folder/'source_private.pdf';target.write_bytes(body)
                         def work_open():
                             nonlocal active,case_root,active_queue_id,folder
+                            cloned_folders = []
+                            target_mapping = {}
+                            if path == '/open_path' and target:
+                                ws_cfg = get_workspace_config(root)
+                                dest_root = None
+                                data_root = None
+                                if req.get('destination'):
+                                    dest_root = Path(str(req['destination']).strip().strip('"'))
+                                elif ws_cfg and ws_cfg.get('data_deidentified'):
+                                    dest_root = Path(ws_cfg['data_deidentified'])
+                                    if ws_cfg.get('data_root'):
+                                        data_root = Path(ws_cfg['data_root'])
+                                if dest_root:
+                                    pc_res = preclone_patient_folders([target], dest_root, data_root=data_root)
+                                    cloned_folders = pc_res.get('cloned_folders', [])
+                                    target_mapping = pc_res.get('mappings', {})
+
                             reused=find_reusable_open_path(target) if path=='/open_path' and not req.get('force_reprepare') else None
                             if reused:
                                 new_case,new_active=reused
@@ -544,13 +606,32 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                                     prepared=prepare(target,new_active,sid,external_seeds=external,progress_cb=set_progress,source_name=original_name if path=='/upload' else None)
                                     if path=='/open_path':
                                         prepared['source_path']=str(target.resolve())
+                                        if target_mapping.get(str(target.resolve())):
+                                            prepared['target_folder']=target_mapping[str(target.resolve())]
                                         save_json(new_active/'review.json',prepared)
                                     elif path=='/upload' and original_name.lower().endswith('.pdf'):
                                         prepared['original_name']=original_name
                                         save_json(new_active/'review.json',prepared)
+                            if new_case and (new_case / 'case_manifest.json').is_file():
+                                mf_path = new_case / 'case_manifest.json'
+                                try:
+                                    mf_data = json.loads(mf_path.read_text(encoding='utf-8'))
+                                    for f in mf_data.get('files', []):
+                                        full_f = str((target / f['source_name']).resolve()) if target.is_dir() else str(target.resolve())
+                                        if full_f in target_mapping:
+                                            f['target_folder'] = target_mapping[full_f]
+                                    if cloned_folders:
+                                        mf_data['target_folder'] = cloned_folders[0]
+                                    elif target_mapping:
+                                        mf_data['target_folder'] = next(iter(target_mapping.values()))
+                                    save_json(mf_path, mf_data)
+                                except Exception:
+                                    pass
                             with lock:
                                 active=new_active;case_root=new_case;active_queue_id=None;validated_jobs.clear();save_session()
-                                return state()
+                                cur_state = state()
+                                cur_state['cloned_folders'] = cloned_folders
+                                return cur_state
                         run_task(async_mode,work_open,self.send,stage='PREPARE',source_file=original_name or (target.name if target else None));return
                     if active_queue_id:operations.enter_context(batch.review_lock(batch_db,active_queue_id))
                     current=check_identity(json.loads(body));req=json.loads(body);job=active;captured_case=case_root
@@ -619,7 +700,7 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                 err=record_error_event(root,exc,stage='CONFLICT',http_path=path)
                 self.send(409,{'error':str(exc),'code':'CONFLICT','error_detail':err})
             except Exception as exc:
-                stg='OPEN_PATH' if path=='/open_path' else ('UPLOAD' if path=='/upload' else 'HTTP_API')
+                stg='WORKSPACE_INIT' if path=='/workspace/init' else ('OPEN_PATH' if path=='/open_path' else ('UPLOAD' if path=='/upload' else 'HTTP_API'))
                 src_f=None
                 try:
                     if path=='/open_path':

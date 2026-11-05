@@ -88,6 +88,21 @@ aside { padding: 12px; background: white; border-radius: 10px; min-width: 0; }
  <div><span class="brand">HMU</span><h1>Khử định danh PDF</h1></div>
  <span class="local-badge">Chạy trên máy</span>
 </header>
+<section id="workspacePanel" class="panel workspace-panel" aria-labelledby="workspaceHeading">
+ <h2 id="workspaceHeading">Windows 11 Desktop Workspace</h2>
+ <p class="muted">Tự động khởi tạo thư mục <code>Data_Root</code> (đầu vào) và <code>Data_Deidentified</code> (đầu ra) ngoài Desktop.</p>
+ <div class="form-row">
+  <label class="grow">Tên Workspace ngoài Desktop
+   <input id="workspaceName" placeholder="HMU_Dot1_TimMach">
+  </label>
+  <button type="button" id="initWorkspace" class="primary">Tạo / Kết nối Workspace trên Desktop</button>
+  <button type="button" id="scanWorkspaceRoot">Quét toàn bộ Data_Root</button>
+ </div>
+ <div class="workspace-paths muted small" style="margin-top:6px;font-size:13px">
+  <div>📁 <strong>Data_Root (đầu vào):</strong> <span id="workspaceDataRoot">Chưa kết nối</span></div>
+  <div>📁 <strong>Data_Deidentified (đầu ra):</strong> <span id="workspaceDataDeidentified">Chưa kết nối</span></div>
+ </div>
+</section>
 <div class="workspace-switch" role="group" aria-label="Chế độ làm việc">
  <button id="localMode" aria-pressed="true">Ca đang mở</button>
  <button id="batchMode" aria-pressed="false">Hàng đợi</button>
@@ -192,6 +207,41 @@ function updateWorkspace(){
 }
 window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue=''}});
 const $=id=>document.getElementById(id),canvas=$('canvas'),ctx=canvas.getContext('2d');
+let currentWorkspace=null;
+function applyWorkspace(ws){
+ if(!ws)return;
+ currentWorkspace=ws;
+ if($('workspaceName')&&ws.workspace_name)$('workspaceName').value=ws.workspace_name;
+ if($('workspaceDataRoot'))$('workspaceDataRoot').textContent=ws.data_root||'Chưa kết nối';
+ if($('workspaceDataDeidentified'))$('workspaceDataDeidentified').textContent=ws.data_deidentified||'Chưa kết nối';
+ if(ws.data_deidentified){
+  if($('folderDestination'))$('folderDestination').value=ws.data_deidentified;
+  folderDestinations.local=ws.data_deidentified;
+  folderDestinations.batch=ws.data_deidentified;
+ }
+}
+$('initWorkspace').onclick=async()=>{
+ const name=($('workspaceName').value||'').trim();
+ if(!name){status('Nhập tên Workspace ngoài Desktop',true);notify('Vui lòng nhập tên Workspace ngoài Desktop','err');return}
+ try{
+  setWorking(true);
+  const r=await request('/workspace/init',JSON.stringify({workspace_name:name}));
+  applyWorkspace(r);
+  const msg='Đã kết nối Workspace: '+r.workspace_name;
+  status(msg);
+  notify(msg,'success');
+ }catch(e){status('Lỗi: '+e.message,true);notify(formatErrorToast(e),'err')}finally{setWorking(false)}
+};
+$('scanWorkspaceRoot').onclick=()=>{
+ if(!currentWorkspace||!currentWorkspace.data_root){
+  status('Chưa khởi tạo Workspace. Vui lòng bấm Tạo / Kết nối Workspace trước.',true);
+  notify('Chưa khởi tạo Workspace. Vui lòng bấm Tạo / Kết nối Workspace trước.','err');
+  return;
+ }
+ setMode('batch');
+ $('batchPaths').value=currentWorkspace.data_root;
+ notify('Đã nạp đường dẫn Data_Root vào hàng đợi: '+currentWorkspace.data_root,'info');
+};
 $('localMode').onclick=()=>setMode('local');
 $('batchMode').onclick=()=>setMode('batch');
 async function request(path,body,headers={}){const r=await fetch(path,{method:'POST',headers:{'X-HMU-Token':token,...headers},body});const d=await r.json();if(!r.ok){const err=Error(d.error||'Không thực hiện được');err.detail=d.error_detail;throw err}return d}
@@ -288,7 +338,26 @@ $('newCase').onclick=async()=>{try{await flush()}catch(e){status(e.message,true)
 async function output(draft){try{await flush();setWorking(true);const scope=files.length&&$('wholeCase').checked?'case':'file';const r=await requestAsync('/export',JSON.stringify({...identity(),draft,scope}),{'Content-Type':'application/json'},'Đang xóa và dựng lại PDF…');$('download').classList.remove('hide');$('download').href='/download?job_id='+encodeURIComponent(data.job_id)+'&scope='+scope;$('download').download=r.file;const msg='Đã xuất '+(r.count||1)+' PDF · '+(draft?'Bản thử cần kiểm tra':'Cần QC bản đầu ra');status(msg);notify(msg,'success');$('busy').textContent='Sản phẩm đã kiểm tra nằm tại: '+r.directory}catch(e){status('Lỗi: '+e.message,true);notify(formatErrorToast(e),'err')}finally{setWorking(false)}}
 $('draft').onclick=()=>queueId?batchReprocess():output(true);$('export').onclick=()=>queueId?batchRelease():output(false);
 $('load').onclick=async()=>{const f=$('file').files[0];if(!f){status('Chọn tệp PDF trước',true);return}try{await flush();setWorking(true);$('busy').textContent='';const r=await requestAsync('/upload',f,{'Content-Type':'application/pdf','X-Study-ID':$('sid').value,'X-Original-Filename':encodeURIComponent(f.name)},'Đang đọc PDF (và chạy OCR bất đồng bộ nếu trang scan/vector)…');$('folderResult').replaceChildren();acceptState(r)}catch(e){status('Lỗi: '+e.message,true);notify(formatErrorToast(e,f.name),'err')}finally{setWorking(false)}};
-$('loadPath').onclick=async()=>{const p=$('localPath').value.trim();if(!p){status('Nhập đường dẫn tệp PDF hoặc thư mục ca bệnh',true);return}try{await flush();setWorking(true);$('busy').textContent='';const r=await requestAsync('/open_path',JSON.stringify({path:p,study_id:$('sid').value}),{'Content-Type':'application/json'},'Đang xử lý tự động bất đồng bộ (kèm OCR & XML seeds)…');$('folderResult').replaceChildren();acceptState(r);if(r.batch_case){$('busy').textContent='Đã chuẩn bị '+r.files.length+' file PDF. Chọn từng file để duyệt rồi bấm Xuất thư mục các PDF đã duyệt tại khối phía trên.'}else if(r.resolved_path){$('busy').textContent='Đã mở ca bệnh (kèm XML seeds): '+r.resolved_path}}catch(e){status('Lỗi: '+e.message,true);notify(formatErrorToast(e,p.split(/[\\/]/).pop()),'err')}finally{setWorking(false)}};
+$('loadPath').onclick=async()=>{
+ const p=$('localPath').value.trim();
+ if(!p){status('Nhập đường dẫn tệp PDF hoặc thư mục ca bệnh',true);return}
+ try{
+  await flush();
+  setWorking(true);
+  $('busy').textContent='';
+  const dest=$('folderDestination').value.trim();
+  const payload={path:p,study_id:$('sid').value};
+  if(dest)payload.destination=dest;
+  const r=await requestAsync('/open_path',JSON.stringify(payload),{'Content-Type':'application/json'},'Đang xử lý tự động bất đồng bộ (kèm OCR & XML seeds)…');
+  $('folderResult').replaceChildren();
+  acceptState(r);
+  if(r.cloned_folders&&r.cloned_folders.length){
+   notify('Đã tạo sẵn '+r.cloned_folders.length+' thư mục bệnh án trống trong Data_Deidentified','info');
+  }
+  if(r.batch_case){$('busy').textContent='Đã chuẩn bị '+r.files.length+' file PDF. Chọn từng file để duyệt rồi bấm Xuất thư mục các PDF đã duyệt tại khối phía trên.'}
+  else if(r.resolved_path){$('busy').textContent='Đã mở ca bệnh (kèm XML seeds): '+r.resolved_path}
+ }catch(e){status('Lỗi: '+e.message,true);notify(formatErrorToast(e,p.split(/[\\/]/).pop()),'err')}finally{setWorking(false)}
+};
 function batchButton(label,action){const b=document.createElement('button');b.textContent=label;b.onclick=action;b.disabled=working;return b}
 function filteredBatchRows(){const filter=$('batchFilter').value;return batchRows.filter(r=>!filter||r.state===filter||(filter==='RUNNING'&&['PREPARING','EXPORTING','VERIFYING'].includes(r.state)))}
 function renderBatch(){
@@ -307,9 +376,9 @@ function renderBatch(){
  $('batchSelectedCount').textContent=batchSelected.size+' đã chọn';$('batchDeleteSelected').disabled=working||!batchSelected.size;
  updateFileNav();
 }
-async function refreshBatch(){try{const response=await fetch('/batch/status');const r=await response.json();if(!response.ok)throw Error(r.error);batchRows=r.jobs;const ids=new Set(batchRows.map(x=>x.id));for(const id of batchSelected)if(!ids.has(id))batchSelected.delete(id);for(const id of seenFailedJobs.keys())if(!ids.has(id))seenFailedJobs.delete(id);for(const j of batchRows){if(j.state==='FAILED'){const lastUpdated=seenFailedJobs.get(j.id);if(lastUpdated!==j.updated){seenFailedJobs.set(j.id,j.updated);notify(formatErrorToast(j.error_detail||j.error,j.source_name),'err')}}}renderBatch();const pending=batchRows.filter(x=>x.state==='NEEDS_REVIEW').length,ready=batchRows.filter(x=>x.state==='READY').length;$('batchStatus').textContent=batchRows.length+' file · '+(r.coordinator.active||0)+' đang chạy · '+pending+' chờ duyệt · '+ready+' đã bàn giao. '+(r.coordinator.message||'')}catch(e){$('batchStatus').textContent=e.message;notify(formatErrorToast(e),'err')}}
+async function refreshBatch(){try{const response=await fetch('/batch/status');const r=await response.json();if(!response.ok)throw Error(r.error);batchRows=r.jobs||[];const ids=new Set(batchRows.map(x=>x.id));for(const id of batchSelected)if(!ids.has(id))batchSelected.delete(id);for(const id of seenFailedJobs.keys())if(!ids.has(id))seenFailedJobs.delete(id);for(const j of batchRows){if(j.state==='FAILED'){const lastUpdated=seenFailedJobs.get(j.id);if(lastUpdated!==j.updated){seenFailedJobs.set(j.id,j.updated);notify(formatErrorToast(j.error_detail||j.error,j.source_name),'err')}}}renderBatch();const pending=batchRows.filter(x=>x.state==='NEEDS_REVIEW').length,ready=batchRows.filter(x=>x.state==='READY').length;$('batchStatus').textContent=batchRows.length+' file · '+(r.coordinator.active||0)+' đang chạy · '+pending+' chờ duyệt · '+ready+' đã bàn giao. '+(r.coordinator.message||'')}catch(e){$('batchStatus').textContent=e.message;notify(formatErrorToast(e),'err')}}
 async function pollBatch(){await refreshBatch();setTimeout(pollBatch,2000)}
-async function batchAction(path,body={}){try{const r=await request(path,JSON.stringify(body));await refreshBatch();return r}catch(e){status(e.message,true);notify(formatErrorToast(e),'err');return null}}
+async function batchAction(path,body={}){try{const r=await request(path,JSON.stringify(body));await refreshBatch();if(r&&r.cloned_folders&&r.cloned_folders.length){notify('Đã tạo sẵn '+r.cloned_folders.length+' thư mục bệnh án trống trong Data_Deidentified','info')}return r}catch(e){status(e.message,true);notify(formatErrorToast(e),'err');return null}}
 async function openBatch(id){try{await flush();setWorking(true);const r=await request('/batch/open_job',JSON.stringify({queue_id:id}));acceptState(r);$('pageNo').focus();notify('Đã mở hồ sơ trong hàng đợi','info')}catch(e){status(e.message,true);notify(formatErrorToast(e),'err')}finally{setWorking(false)}}
 async function loadBatchQc(){if(!queueId||!data)return;const id=queueId,job=data.job_id,revision=data.revision;try{const r=await fetch('/batch/qc?queue_id='+id+'&revision='+revision);const qc=await r.json();if(queueId!==id||!data||data.job_id!==job||data.revision!==revision)return;if(!r.ok)throw Error(qc.error);batchIssues=qc.issues;renderIssues();$('download').classList.remove('hide');$('download').href='/batch/pdf?queue_id='+id+'&revision='+revision;$('download').download=qc.filename||'CASE_'+id.slice(0,16)+'_DRAFT.pdf'}catch(e){if(queueId===id){batchIssues=[];renderIssues();$('qcStatus').textContent=e.message;$('download').classList.add('hide')}}}
 function renderIssues(){const box=$('qcIssues');if(!box)return;box.replaceChildren();$('batchReview').classList.toggle('hide',!queueId||workspaceMode!=='batch');$('qcStatus').textContent=batchIssues.filter(f=>!f.resolved).length+' cảnh báo chưa xử lý. Kiểm toàn bộ trang, kể cả trang không có cờ.';batchIssues.forEach(f=>{const row=document.createElement('div');row.className='item';const t=document.createElement('span');t.textContent='Trang '+f.page+' · '+f.kind+' · '+f.text+(f.resolved?' · Đã xác nhận':'');row.append(t,batchButton('Đến trang',()=>navigate(f.page-1)));if(!f.resolved)row.append(batchButton('Xác nhận giữ',async()=>{await flush();const reason=$('qcReason').value,reviewer=$('qcReviewer').value;const r=await batchAction('/batch/resolve_finding',{queue_id:queueId,revision:data.revision,finding_id:f.id,reason,reviewer});if(r)await loadBatchQc()}));box.append(row)})}
@@ -400,9 +469,19 @@ async function exportFolder(){
     await loadBatchQc();
     $('download').download=released.output.split(/[\\/]/).pop();
    }
+   if(result.comparisons&&result.comparisons.length){
+    result.comparisons.forEach(c=>{
+     const copyName=(c.target_folder||'').split(/[\\/]/).pop();
+     notify('Phát hiện bản xuất trước! Đã tạo bản sao đối chiếu: '+copyName+' (giữ nguyên thư mục gốc)','info',10000);
+    });
+   }
   }else{
    result=await requestAsync('/export_folder',JSON.stringify({...identity(),destination}),{'Content-Type':'application/json'},'Đang xuất thư mục các PDF đã duyệt…');
    count=result.count;
+   if(result.copied_for_comparison){
+    const copyName=(result.directory||'').split(/[\\/]/).pop();
+    notify('Phát hiện bản xuất trước! Đã tạo bản sao đối chiếu: '+copyName+' (giữ nguyên thư mục gốc)','info',10000);
+   }
   }
   const message='Đã xuất '+count+' PDF.'+(result.directory?' Thư mục: '+result.directory:'')+' Còn '+result.pending.length+' file chưa đủ điều kiện.';
   const reviewAction=batch?batchReviewAction:item=>files.some(f=>f.index===item.index)?()=>openCaseFile(item.index):null;
@@ -413,12 +492,12 @@ async function exportFolder(){
  }catch(e){status(e.message,true);notify(formatErrorToast(e),'err')}finally{setWorking(false)}
 }
 $('exportFolder').onclick=exportFolder;
-$('batchAdd').onclick=()=>batchAction('/batch/enqueue',{paths:batchPaths()});
+$('batchAdd').onclick=()=>{const dest=$('folderDestination').value.trim();batchAction('/batch/enqueue',{paths:batchPaths(),...(dest?{destination:dest}:{})})};
 $('batchSelectAll').onclick=()=>{filteredBatchRows().forEach(r=>batchSelected.add(r.id));renderBatch()};$('batchClearSelection').onclick=()=>{batchSelected.clear();renderBatch()};
 $('batchDeleteSelected').onclick=()=>deleteBatch([...batchSelected]);
 $('batchStart').onclick=()=>batchAction('/batch/resume');$('batchPause').onclick=()=>batchAction('/batch/pause');$('batchFilter').onchange=renderBatch;
 $('refreshQc').onclick=async()=>{try{await flush();await loadBatchQc()}catch(e){status(e.message,true);notify(formatErrorToast(e),'err')}};
 $('compareOutput').onclick=async()=>{try{await flush();previewOutput=!previewOutput;show()}catch(e){status(e.message,true);notify(formatErrorToast(e),'err')}};
-fetch('/state').then(r=>{if(!r.ok)throw Error('Không đọc được phiên HMU');return r.json()}).then(s=>{token=s.token;data=s.review;queueId=s.queue_id;files=s.files||[];setMode(queueId?'batch':'local');if(data){show();if(queueId)loadBatchQc()}pollBatch()}).catch(e=>{status(e.message,true);notify(formatErrorToast(e),'err')});
+fetch('/state').then(r=>{if(!r.ok)throw Error('Không đọc được phiên HMU');return r.json()}).then(s=>{token=s.token;data=s.review;queueId=s.queue_id;files=s.files||[];if(s.workspace)applyWorkspace(s.workspace);setMode(queueId?'batch':'local');if(data){show();if(queueId)loadBatchQc()}pollBatch()}).catch(e=>{status(e.message,true);notify(formatErrorToast(e),'err')});
 </script>
 </html>

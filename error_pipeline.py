@@ -91,11 +91,12 @@ def classify_error(exc: BaseException | str, stage: str | None = None, message: 
         'file rỗng',
         'file bị hỏng',
         'invalid research id',
+        'workspace',
     )
     if any(kw in msg_str for kw in file_err_keywords):
         return CATEGORY_FILE_ERROR
 
-    if stage == 'OPEN_PATH' and ('không' in msg_str or 'invalid' in msg_str or 'lỗi' in msg_str):
+    if stage in {'OPEN_PATH', 'WORKSPACE', 'WORKSPACE_INIT'} and ('không' in msg_str or 'invalid' in msg_str or 'lỗi' in msg_str or 'tên' in msg_str):
         return CATEGORY_FILE_ERROR
 
     return CATEGORY_CODE_ERROR

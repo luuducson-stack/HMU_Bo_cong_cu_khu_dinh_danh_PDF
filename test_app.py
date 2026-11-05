@@ -435,4 +435,190 @@ class AppTests(unittest.TestCase):
     mock_server.server_close.assert_called_once()
     self.assertIn('[HMU BÁO LỖI] Phiên làm việc ghi nhận 1 lỗi.', out.getvalue())
     self.assertIn(str((sum_root / 'error_report.json').resolve()), out.getvalue())
+ def test_workspace_init_creates_folders_and_persists_config(self):
+  desktop_dir = self.root / "fake_desktop"
+  desktop_dir.mkdir(parents=True, exist_ok=True)
+  # 1. Gọi POST /workspace/init với workspace_name="BenhAn_Dot01"
+  code, resp = self.req('POST', '/workspace/init', {
+      'workspace_name': 'BenhAn_Dot01',
+      'desktop_base': str(desktop_dir)
+  })
+  self.assertEqual(code, 200, resp)
+  self.assertEqual(resp['workspace_name'], 'BenhAn_Dot01')
+  self.assertEqual(resp['workspace_dir'], str((desktop_dir / 'BenhAn_Dot01').resolve()))
+  self.assertEqual(resp['data_root'], str((desktop_dir / 'BenhAn_Dot01' / 'Data_Root').resolve()))
+  self.assertEqual(resp['data_deidentified'], str((desktop_dir / 'BenhAn_Dot01' / 'Data_Deidentified').resolve()))
+
+  self.assertTrue((desktop_dir / 'BenhAn_Dot01' / 'Data_Root').is_dir())
+  self.assertTrue((desktop_dir / 'BenhAn_Dot01' / 'Data_Deidentified').is_dir())
+
+  cfg_file = self.root / 'jobs' / 'workspace_config.json'
+  self.assertTrue(cfg_file.is_file())
+  cfg = json.loads(cfg_file.read_text(encoding='utf-8'))
+  self.assertEqual(cfg['workspace_name'], 'BenhAn_Dot01')
+  self.assertEqual(cfg['data_root'], str((desktop_dir / 'BenhAn_Dot01' / 'Data_Root').resolve()))
+  self.assertEqual(cfg['data_deidentified'], str((desktop_dir / 'BenhAn_Dot01' / 'Data_Deidentified').resolve()))
+
+  # 2. Tên chứa ký tự không hợp lệ trên Windows (<>:"/\|?* hoặc ..) bị chặn với mã lỗi 400 (FILE_ERROR)
+  for invalid_name in ['BenhAn/Dot01', 'BenhAn\\Dot01', 'Dot:01', 'Dot*01', 'Dot?01', 'Dot<01>', 'Dot"01', 'Dot|01', '..', 'Dot..01', 'CON', 'PRN', ' ']:
+      c, err = self.req('POST', '/workspace/init', {'workspace_name': invalid_name, 'desktop_base': str(desktop_dir)})
+      self.assertEqual(c, 400, f"Expected 400 for name: {invalid_name}")
+      self.assertEqual(err.get('error_detail', {}).get('category'), 'FILE_ERROR', f"Expected FILE_ERROR for {invalid_name}: {err}")
+
+  # 3. GET /state trả về đúng cấu hình workspace đã lưu khi mở lại phiên làm việc
+  c, state = self.req('GET', '/state')
+  self.assertEqual(c, 200)
+  self.assertIn('workspace', state)
+  self.assertIsNotNone(state['workspace'])
+  self.assertEqual(state['workspace']['workspace_name'], 'BenhAn_Dot01')
+  self.assertEqual(state['workspace']['data_root'], str((desktop_dir / 'BenhAn_Dot01' / 'Data_Root').resolve()))
+
+  # Test /workspace/state
+  c, ws_state = self.req('GET', '/workspace/state')
+  self.assertEqual(c, 200)
+  self.assertEqual(ws_state.get('workspace_name'), 'BenhAn_Dot01')
+
+  # Test /workspace/open_explorer
+  c, exp_res = self.req('POST', '/workspace/open_explorer', {'target': 'data_root'})
+  self.assertEqual(c, 200)
+  self.assertEqual(exp_res.get('status'), 'ok')
+  self.assertEqual(exp_res.get('opened'), str((desktop_dir / 'BenhAn_Dot01' / 'Data_Root').resolve()))
+
+ def test_preclone_on_batch_enqueue_and_open_path(self):
+  desktop_dir = self.root / "fake_desktop_preclone"
+  desktop_dir.mkdir(parents=True, exist_ok=True)
+  code, ws_init = self.req('POST', '/workspace/init', {
+      'workspace_name': 'HMU_Dot1_Preclone',
+      'desktop_base': str(desktop_dir)
+  })
+  self.assertEqual(code, 200, ws_init)
+  data_root = Path(ws_init['data_root'])
+  data_deidentified = Path(ws_init['data_deidentified'])
+
+  # 1. Tạo 2 folder bệnh án thật trong Data_Root:
+  ba1 = data_root / 'BA001_NguyenVanA'
+  ba2 = data_root / 'BA002_TranThiB'
+  ba1.mkdir(parents=True, exist_ok=True)
+  ba2.mkdir(parents=True, exist_ok=True)
+
+  to_bia = ba1 / 'to_bia.pdf'
+  xet_nghiem = ba2 / 'xet_nghiem.pdf'
+  with fitz.open() as d:
+      d.new_page().insert_text((50, 50), "Benh an BA001")
+      d.save(to_bia)
+  with fitz.open() as d:
+      d.new_page().insert_text((50, 50), "Benh an BA002")
+      d.save(xet_nghiem)
+
+  # 2. Gọi POST /batch/enqueue với đường dẫn Data_Root:
+  code, enq_res = self.req('POST', '/batch/enqueue', {'paths': [str(data_root)]})
+  self.assertEqual(code, 200, enq_res)
+  self.assertIn('cloned_folders', enq_res)
+
+  # Ngay lập tức trong Data_Deidentified xuất hiện 2 folder trống
+  self.assertTrue((data_deidentified / 'BA001_NguyenVanA').is_dir())
+  self.assertTrue((data_deidentified / 'BA002_TranThiB').is_dir())
+  self.assertEqual(len(list((data_deidentified / 'BA001_NguyenVanA').iterdir())), 0)
+  self.assertEqual(len(list((data_deidentified / 'BA002_TranThiB').iterdir())), 0)
+
+  # 3. Kiểm tra trong SQLite jobs: bản ghi to_bia trỏ đúng vào BA001, xet_nghiem trỏ đúng vào BA002
+  import sqlite3
+  db_path = self.root / 'jobs' / 'batch' / 'queue.sqlite3'
+  with sqlite3.connect(db_path) as con:
+      con.row_factory = sqlite3.Row
+      r1 = con.execute("SELECT target_folder FROM jobs WHERE source_path=?", (str(to_bia.resolve()),)).fetchone()
+      self.assertIsNotNone(r1)
+      self.assertEqual(r1['target_folder'], str((data_deidentified / 'BA001_NguyenVanA').resolve()))
+
+      r2 = con.execute("SELECT target_folder FROM jobs WHERE source_path=?", (str(xet_nghiem.resolve()),)).fetchone()
+      self.assertIsNotNone(r2)
+      self.assertEqual(r2['target_folder'], str((data_deidentified / 'BA002_TranThiB').resolve()))
+
+  # 4. Kiểm tra /open_path với folder bệnh án:
+  code, open_res = self.req('POST', '/open_path', {'path': str(ba1), 'study_id': 'CASE_BA1'})
+  self.assertEqual(code, 200, open_res)
+  self.assertIn('cloned_folders', open_res)
+  self.assertIn(str((data_deidentified / 'BA001_NguyenVanA').resolve()), open_res['cloned_folders'])
+
+  # Kiểm tra case_manifest.json lưu target_folder
+  manifest_files = list(self.root.glob('**/case_manifest.json'))
+  self.assertTrue(len(manifest_files) > 0)
+  manifest = json.loads(manifest_files[-1].read_text(encoding='utf-8'))
+  self.assertEqual(manifest.get('target_folder'), str((data_deidentified / 'BA001_NguyenVanA').resolve()))
+
+ def test_local_path_folder_export_direct_to_cloned_folder_and_creates_copy_on_collision(self):
+  import delivery
+  base_dest = self.root / 'test_resolve_dest'
+  base_dest.mkdir(parents=True, exist_ok=True)
+  # 1. Unit test delivery.resolve_target_folder_with_copy
+  p1, copied1, from1 = delivery.resolve_target_folder_with_copy(base_dest, 'BA_ALPHA', ['doc.pdf'])
+  self.assertEqual(p1, (base_dest / 'BA_ALPHA').resolve())
+  self.assertFalse(copied1)
+  self.assertIsNone(from1)
+
+  # Tạo pre-clone rỗng
+  p1.mkdir(parents=True, exist_ok=True)
+  p1_again, copied1_again, _ = delivery.resolve_target_folder_with_copy(base_dest, 'BA_ALPHA', ['doc.pdf'])
+  self.assertEqual(p1_again, p1)
+  self.assertFalse(copied1_again)
+
+  # Giả lập đã xuất PDF hoặc manifest
+  (p1 / 'manifest.json').write_text('{}', encoding='utf-8')
+  p2, copied2, from2 = delivery.resolve_target_folder_with_copy(base_dest, 'BA_ALPHA', ['doc.pdf'])
+  self.assertEqual(p2, (base_dest / 'BA_ALPHA_Copy1').resolve())
+  self.assertTrue(copied2)
+  self.assertEqual(from2, str(p1))
+
+  # Giả lập Copy1 cũng đã xuất
+  p2.mkdir(parents=True, exist_ok=True)
+  (p2 / 'doc.pdf').write_bytes(b'%PDF-1.4 mock')
+  p3, copied3, from3 = delivery.resolve_target_folder_with_copy(base_dest, 'BA_ALPHA', ['doc.pdf'])
+  self.assertEqual(p3, (base_dest / 'BA_ALPHA_Copy2').resolve())
+  self.assertTrue(copied3)
+  self.assertEqual(from3, str(p1))
+
+  # 2. Integration test qua HTTP endpoint /export_folder
+  case_dir = self.root / 'BN_TEST_COLLISION'
+  case_dir.mkdir(parents=True, exist_ok=True)
+  (case_dir / 'file1.pdf').write_bytes(self.pdf())
+  (case_dir / 'file2.pdf').write_bytes(self.pdf())
+
+  deid_root = self.root / 'Data_Deidentified'
+  deid_root.mkdir(parents=True, exist_ok=True)
+
+  code, open_res = self.req('POST', '/open_path', {'path': str(case_dir), 'study_id': 'COLLISION', 'destination': str(deid_root)})
+  self.assertEqual(code, 200, open_res)
+  code, app_res = self.req('POST', '/approve_all', self.ident(open_res['review']))
+  self.assertEqual(code, 200, app_res)
+
+  # Xuất lần 1: đổ thẳng vào Data_Deidentified/BN_TEST_COLLISION (đã clone)
+  code, exp1 = self.req('POST', '/export_folder', {**self.ident(app_res['review']), 'destination': str(deid_root)})
+  self.assertEqual(code, 200, exp1)
+  target_patient = deid_root / 'BN_TEST_COLLISION'
+  self.assertEqual(Path(exp1['directory']).resolve(), target_patient.resolve())
+  self.assertNotIn('BAN_GIAO_', exp1['directory'])
+  self.assertFalse(exp1.get('copied_for_comparison', False))
+  self.assertIsNone(exp1.get('original_directory'))
+  self.assertTrue((target_patient / 'file1.pdf').exists())
+  self.assertTrue((target_patient / 'manifest.json').exists())
+
+  # Xuất lần 2: phát hiện trùng, giữ nguyên bản cũ, tạo BN_TEST_COLLISION_Copy1
+  code, exp2 = self.req('POST', '/export_folder', {**self.ident(app_res['review']), 'destination': str(deid_root)})
+  self.assertEqual(code, 200, exp2)
+  copy1_patient = deid_root / 'BN_TEST_COLLISION_Copy1'
+  self.assertEqual(Path(exp2['directory']).resolve(), copy1_patient.resolve())
+  self.assertTrue(exp2.get('copied_for_comparison'))
+  self.assertEqual(exp2.get('original_directory'), str(target_patient.resolve()))
+  self.assertTrue((target_patient / 'file1.pdf').exists()) # Bản cũ vẫn nguyên vẹn
+  self.assertTrue((copy1_patient / 'file1.pdf').exists())
+
+  # Xuất lần 3: tạo BN_TEST_COLLISION_Copy2
+  code, exp3 = self.req('POST', '/export_folder', {**self.ident(app_res['review']), 'destination': str(deid_root)})
+  self.assertEqual(code, 200, exp3)
+  copy2_patient = deid_root / 'BN_TEST_COLLISION_Copy2'
+  self.assertEqual(Path(exp3['directory']).resolve(), copy2_patient.resolve())
+  self.assertTrue(exp3.get('copied_for_comparison'))
+  self.assertEqual(exp3.get('original_directory'), str(target_patient.resolve()))
+
+
 if __name__=='__main__':unittest.main()
