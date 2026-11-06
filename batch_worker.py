@@ -87,7 +87,10 @@ def main():
         import engine
         from error_pipeline import record_error_event
         row=request['job']
-        root_dir=Path(row['job_dir']).parent.parent
+        job_dir=Path(row['job_dir'])
+        job_dir.mkdir(parents=True,exist_ok=True)
+        batch_dir=job_dir.parent.parent
+        root_dir=batch_dir.parent if batch_dir.name in {'batch','queue'} else batch_dir
         err=record_error_event(
             root_dir,
             exc,
@@ -96,9 +99,12 @@ def main():
             job_id=row.get('id'),
             queue_id=row.get('id'),
         )
-        engine.save_json(Path(row['job_dir'])/f"error_{row['attempt_id']}.json",dict(
+        engine.save_json(job_dir/f"error_{row['attempt_id']}.json",{
             **err,
-            type=type(exc).__name__,message=str(exc),retryable=isinstance(exc,TimeoutError) or getattr(exc,'winerror',None) in {32,33,1450}))
+            'type':type(exc).__name__,
+            'message':err.get('message') or str(exc),
+            'retryable':isinstance(exc,TimeoutError) or getattr(exc,'winerror',None) in {32,33,1450},
+        })
         raise
 
 
