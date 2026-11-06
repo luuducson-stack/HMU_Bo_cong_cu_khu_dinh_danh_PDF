@@ -833,5 +833,50 @@ class AppTests(unittest.TestCase):
     release.set()
     holder.join(timeout=2.0)
 
+ def test_batch_retry_single_and_bulk_starts_background_and_allows_opening_failed_with_review(self):
+  import batch, batch_worker
+  from unittest.mock import patch
+  s1 = self.root / 'retry_1.pdf'
+  s2 = self.root / 'retry_2.pdf'
+  s1.write_bytes(self.pdf())
+  s2.write_bytes(self.pdf())
+  db = self.root / 'jobs' / 'batch' / 'queue.sqlite3'
+  ids = batch.enqueue(db, [s1, s2])
+  r1 = batch.claim_next(db)
+  r2 = batch.claim_next(db)
+  with patch('output_qc.ocr_pdf_pages', return_value={1: ('Clinical stable', [])}):
+   res1 = batch_worker.process_job(r1, ocr_workers=1, render_workers=1)
+  batch.set_stage_result(db, ids[0], expected_state='PREPARING', result={'state': 'FAILED', 'error': 'Export verify failed'})
+  batch.set_stage_result(db, ids[1], expected_state='PREPARING', result={'state': 'FAILED', 'error': 'Worker crash'})
+  batch.pause_queue(db)
+
+  code, st = self.req('GET', '/batch/status')
+  self.assertEqual(code, 200, st)
+  by_id = {j['id']: j for j in st['jobs']}
+  self.assertEqual(by_id[ids[0]]['source_path'], str(s1.resolve()))
+  self.assertTrue(by_id[ids[0]]['can_open'], 'FAILED job with prepared review.json must report can_open=True')
+  self.assertFalse(by_id[ids[1]]['can_open'], 'FAILED job without review.json must report can_open=False')
+
+  # User can open FAILED job that already has review.json to inspect/test on canvas
+  code, opened = self.req('POST', '/batch/open_job', {'queue_id': ids[0]})
+  self.assertEqual(code, 200, opened)
+  self.assertEqual(opened['queue_id'], ids[0])
+
+  # Single retry and bulk retry both resume queue and start background coordinator
+  with patch('batch.start_background', return_value=9999) as mock_bg:
+   code, ret1 = self.req('POST', '/batch/retry', {'queue_id': ids[0]})
+   self.assertEqual(code, 200, ret1)
+   self.assertTrue(ret1.get('queued'))
+   self.assertIn(ids[0], ret1.get('retried', []))
+   self.assertEqual(mock_bg.call_count, 1)
+
+   code, ret2 = self.req('POST', '/batch/retry', {'queue_ids': [ids[1]]})
+   self.assertEqual(code, 200, ret2)
+   self.assertEqual(ret2.get('retried'), [ids[1]])
+   self.assertEqual(mock_bg.call_count, 2)
+
+  self.assertEqual(batch.get_job(db, ids[0])['state'], 'QUEUED')
+  self.assertEqual(batch.get_job(db, ids[1])['state'], 'QUEUED')
+
 
 if __name__=='__main__':unittest.main()
