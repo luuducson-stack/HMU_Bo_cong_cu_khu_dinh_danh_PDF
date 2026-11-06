@@ -93,6 +93,26 @@ const sent=[];vm.runInContext('loadBatchQcOriginal=loadBatchQc',ctx);ctx.fetch=a
  await vm.runInContext("refreshBatch()",ctx);
  assert.equal(errToasts().length,countBeforeFailedPoll+2,'refreshBatch must emit new toast when updated timestamp changes');
 
+ // Fourth poll with structured error_detail (from /batch/status payload) -> formats code location in toast
+ const failedWithDetail={
+  id:'q_fail_detail',
+  state:'FAILED',
+  source_name:'crash_worker.pdf',
+  error:'Worker stopped with exit 1',
+  updated:300,
+  error_detail:{
+   category:'CODE_ERROR',
+   stage:'BATCH_WORKER',
+   message:'Worker stopped with exit 1',
+   source_file:'crash_worker.pdf',
+   code_location:{file:'batch.py',line:441,function:'_reap_active_workers'}
+  }
+ };
+ ctx.fetch=async()=>({ok:true,json:async()=>({jobs:[failedJob,failedWithDetail],coordinator:{}})});
+ await vm.runInContext("refreshBatch()",ctx);
+ assert.equal(errToasts().length,countBeforeFailedPoll+3,'refreshBatch must emit toast for newly failed job with error_detail');
+ assert.ok(errToasts().at(-1).textContent.includes('[Lỗi Code: batch.py:441] Worker stopped with exit 1'),'failed toast must format error_detail when present');
+
  // Phase 4 Task 4.1: Batch pre-clone toasts & release collision comparison toasts & state workspace
  // 1. Batch enqueue returns cloned_folders -> pill toast
  ctx.fetch = async (path, opts) => {
@@ -141,6 +161,54 @@ const sent=[];vm.runInContext('loadBatchQcOriginal=loadBatchQc',ctx);ctx.fetch=a
  assert.equal(elements.get('workspaceDataRoot').textContent, 'C:/Ws/Data_Root');
  assert.equal(elements.get('workspaceDataDeidentified').textContent, 'C:/Ws/Data_Deidentified');
  assert.equal(elements.get('folderDestination').value, 'C:/Ws/Data_Deidentified');
+
+ // Phase 2 Task 3: Offline Toast deduplication and auto token resync on server reconnect
+ vm.runInContext("token='OLD_TOKEN_BEFORE_RESTART';serverOffline=false", ctx);
+ const toastsBeforeOffline = toastBox.children.length;
+
+ // 1. First disconnect -> sets serverOffline = true and shows 1 warning toast mentioning MO_CONG_CU.bat
+ ctx.fetch = async () => { throw new TypeError('Failed to fetch'); };
+ await vm.runInContext("refreshBatch()", ctx);
+ assert.equal(vm.runInContext('serverOffline', ctx), true, 'serverOffline flag must become true on fetch failure');
+ assert.equal(toastBox.children.length, toastsBeforeOffline + 1, 'first disconnect must emit 1 warning toast');
+ assert.ok(toastBox.children.at(-1).textContent.includes('MO_CONG_CU.bat'), 'offline toast must instruct user to reopen MO_CONG_CU.bat');
+
+ // 2. Subsequent 2s polls while still offline -> NO duplicate toasts
+ await vm.runInContext("refreshBatch()", ctx);
+ await vm.runInContext("refreshBatch()", ctx);
+ assert.equal(toastBox.children.length, toastsBeforeOffline + 1, 'repeated offline polls must not spam additional toasts');
+
+ // 3. Server comes back online -> serverOffline transitions true -> false, fetches /state to update token, and notifies user
+ let stateCalledOnReconnect = false;
+ ctx.fetch = async (path) => {
+   if (path === '/batch/status') {
+     return { ok: true, json: async () => ({ jobs: [], coordinator: {} }) };
+   }
+   if (path === '/state') {
+     stateCalledOnReconnect = true;
+     return {
+       ok: true,
+       json: async () => ({
+         token: 'NEW_TOKEN_AFTER_RESTART',
+         review: null,
+         files: [],
+         queue_id: null
+       })
+     };
+   }
+   throw Error('Unexpected path: ' + path);
+ };
+ await vm.runInContext("refreshBatch()", ctx);
+ assert.equal(vm.runInContext('serverOffline', ctx), false, 'serverOffline must reset to false when server responds');
+ assert.equal(stateCalledOnReconnect, true, 'reconnect must automatically fetch /state');
+ assert.equal(vm.runInContext('token', ctx), 'NEW_TOKEN_AFTER_RESTART', 'reconnect must synchronize new security token');
+ assert.equal(toastBox.children.length, toastsBeforeOffline + 2, 'reconnect must emit a success/reconnect toast');
+
+ // 4. Subsequent normal online polls -> does not re-fetch /state or spam reconnect toast
+ stateCalledOnReconnect = false;
+ await vm.runInContext("refreshBatch()", ctx);
+ assert.equal(stateCalledOnReconnect, false, 'normal online poll must not fetch /state again');
+ assert.equal(toastBox.children.length, toastsBeforeOffline + 2, 'normal online poll must not emit toast');
 
  console.log('Batch UI save-before-switch and stale-QC guards: PASS');
 })().catch(e=>{console.error(e);process.exitCode=1});

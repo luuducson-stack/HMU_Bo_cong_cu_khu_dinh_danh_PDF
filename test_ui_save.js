@@ -26,9 +26,10 @@ const element = (initHide = false) => {
 };
 let release, first = true;
 const sent = [];
+const windowListeners = {};
 const context = vm.createContext({console, structuredClone, Image:class {},
-  window:{addEventListener(){}}, document:{getElementById(id){if(!elements.has(id))elements.set(id,element(id==='auditModal'));return elements.get(id)},querySelectorAll(){return [...elements.values()]},createElement(){return element(false)},createTextNode:t=>t},
-  setTimeout(){return 1},clearTimeout(){},requestAnimationFrame(){},
+  window:{addEventListener(evt, fn){windowListeners[evt] = fn}}, document:{getElementById(id){if(!elements.has(id))elements.set(id,element(id==='auditModal'));return elements.get(id)},querySelectorAll(){return [...elements.values()]},createElement(){return element(false)},createTextNode:t=>t},
+  setTimeout(fn){return 1},clearTimeout(){},requestAnimationFrame(){},
   fetch:async(path,opts)=>{const body=JSON.parse(opts.body);sent.push(body);if(first){first=false;await new Promise(r=>release=r)}return {ok:true,json:async()=>({saved:true,revision:sent.length})}}
 });
 let source = fs.readFileSync(__dirname+'/ui/review.js','utf8');
@@ -117,4 +118,57 @@ vm.runInContext("data={job_id:'job',revision:0,pages:[{page:1,reviewed:false,man
   assert.match(toastBox.children.at(-1).textContent, /Đã xuất 1 PDF/);
   assert.equal(elements.get('status').textContent, 'Đã xuất 1 PDF · Cần QC bản đầu ra');
   console.log('UI Pill Toast notifications on save/done/approveAll/export: PASS');
+
+  // Phase 2 Task 1: beforeunload prevents closing tab when dirty || working
+  assert.equal(typeof windowListeners.beforeunload, 'function', 'beforeunload listener must be registered');
+  const fireUnload = () => {
+    let prevented = false;
+    const evt = { preventDefault() { prevented = true; }, returnValue: undefined };
+    windowListeners.beforeunload(evt);
+    return { prevented, returnValue: evt.returnValue };
+  };
+  vm.runInContext('dirty=false;working=false', context);
+  assert.deepEqual(fireUnload(), { prevented: false, returnValue: undefined }, 'clean and idle must not block unload');
+  vm.runInContext('dirty=true;working=false', context);
+  assert.deepEqual(fireUnload(), { prevented: true, returnValue: '' }, 'dirty must block unload');
+  vm.runInContext('dirty=false;working=true', context);
+  assert.deepEqual(fireUnload(), { prevented: true, returnValue: '' }, 'working must block unload');
+  vm.runInContext('dirty=false;working=false', context);
+  console.log('UI beforeunload guard on dirty || working: PASS');
+
+  // Phase 2 Task 2: resumeTask(taskId) polls /progress and reloads /state on completion
+  context.setTimeout = (fn) => { setImmediate(fn); return 1; };
+  let progressPolls = 0;
+  let stateReloaded = false;
+  context.fetch = async (path) => {
+    if (path.startsWith('/progress?task_id=task_f5_123')) {
+      progressPolls++;
+      if (progressPolls === 1) {
+        return { ok: true, json: async () => ({ status: 'running', task_id: 'task_f5_123', progress: 'Đang OCR trang 2/5' }) };
+      }
+      return { ok: true, json: async () => ({ status: 'done', task_id: 'task_f5_123', result: { count: 1 } }) };
+    }
+    if (path === '/state') {
+      stateReloaded = true;
+      return {
+        ok: true,
+        json: async () => ({
+          token: 'new_tok',
+          review: { job_id: 'resumed_job', revision: 5, pages: [{ page: 1, reviewed: true, manual_rects: [], proposals: [] }], watermarks_removed: [] },
+          files: [],
+          queue_id: null
+        })
+      };
+    }
+    throw Error('Unexpected fetch: ' + path);
+  };
+  assert.equal(typeof vm.runInContext('typeof resumeTask', context), 'string');
+  assert.equal(vm.runInContext('typeof resumeTask', context), 'function', 'resumeTask must be defined');
+  const resumePromise = vm.runInContext("resumeTask('task_f5_123')", context);
+  await resumePromise;
+  assert.equal(progressPolls, 2, 'resumeTask must poll /progress until done');
+  assert.equal(stateReloaded, true, 'resumeTask must reload /state when task finishes');
+  assert.equal(vm.runInContext('data.job_id', context), 'resumed_job', 'reloaded /state must update active review data');
+  assert.equal(vm.runInContext('working', context), false, 'working must be reset to false after resumeTask completes');
+  console.log('UI resumeTask after F5 reload: PASS');
 })().catch(e=>{console.error(e);process.exitCode=1});
