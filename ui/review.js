@@ -48,7 +48,7 @@ function updateWorkspace(){
   : 'Xuất từ công việc đang mở ('+(files.length||1)+' PDF), giữ tên file gốc.';
  updateFileNav();
 }
-window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue=''}});
+window.addEventListener('beforeunload',e=>{if(dirty||working){e.preventDefault();e.returnValue=''}});
 const $=id=>document.getElementById(id),canvas=$('canvas'),ctx=canvas.getContext('2d');
 let currentWorkspace=null;
 function applyWorkspace(ws){
@@ -123,6 +123,7 @@ function formatErrorToast(errOrDetail,fallbackFile){
  return msg;
 }
 const seenFailedJobs=new Map();
+let serverOffline=false;
 async function requestAsync(path,body,headers={},fallback='Đang xử lý bất đồng bộ…'){
  status('⏳ '+fallback);
  const r=await fetch(path,{method:'POST',headers:{'X-HMU-Token':token,'X-HMU-Async':'1',...headers},body});
@@ -138,6 +139,36 @@ async function requestAsync(path,body,headers={},fallback='Đang xử lý bất 
   if(pd.status==='error'){const err=Error(pd.error||'Lỗi xử lý bất đồng bộ');err.detail=pd.error_detail;throw err}
   if(pd.status==='done')return pd.result;
   if(pd.progress)status('⏳ '+pd.progress+(pd.elapsed?' ('+pd.elapsed+'s)':''));
+ }
+}
+async function resumeTask(taskId){
+ setWorking(true);
+ status('⏳ Đang khôi phục tiến trình xử lý bất đồng bộ…');
+ try{
+  while(true){
+   await new Promise(res=>setTimeout(res,350));
+   const pr=await fetch('/progress?task_id='+encodeURIComponent(taskId));
+   const pd=await pr.json();
+   if(!pr.ok){const err=Error(pd.error||'Không lấy được trạng thái tác vụ');err.detail=pd.error_detail;throw err}
+   if(pd.status==='error'){const err=Error(pd.error||'Lỗi xử lý bất đồng bộ');err.detail=pd.error_detail;throw err}
+   if(pd.status==='done'){
+    const sr=await fetch('/state');
+    if(sr.ok){
+     const s=await sr.json();
+     if(s.token)token=s.token;
+     if(s.workspace)applyWorkspace(s.workspace);
+     acceptState(s);
+    }
+    notify('Tác vụ xử lý nền đã hoàn tất','success');
+    return pd.result;
+   }
+   if(pd.progress)status('⏳ '+pd.progress+(pd.elapsed?' ('+pd.elapsed+'s)':''));
+  }
+ }catch(e){
+  status('Lỗi: '+e.message,true);
+  notify(formatErrorToast(e),'err');
+ }finally{
+  setWorking(false);
  }
 }
 function page(){return data.pages[pn]}
@@ -219,7 +250,49 @@ function renderBatch(){
  $('batchSelectedCount').textContent=batchSelected.size+' đã chọn';$('batchDeleteSelected').disabled=working||!batchSelected.size;
  updateFileNav();
 }
-async function refreshBatch(){try{const response=await fetch('/batch/status');const r=await response.json();if(!response.ok)throw Error(r.error);batchRows=r.jobs||[];const ids=new Set(batchRows.map(x=>x.id));for(const id of batchSelected)if(!ids.has(id))batchSelected.delete(id);for(const id of seenFailedJobs.keys())if(!ids.has(id))seenFailedJobs.delete(id);for(const j of batchRows){if(j.state==='FAILED'){const lastUpdated=seenFailedJobs.get(j.id);if(lastUpdated!==j.updated){seenFailedJobs.set(j.id,j.updated);notify(formatErrorToast(j.error_detail||j.error,j.source_name),'err')}}}renderBatch();const pending=batchRows.filter(x=>x.state==='NEEDS_REVIEW').length,ready=batchRows.filter(x=>x.state==='READY').length;$('batchStatus').textContent=batchRows.length+' file · '+(r.coordinator.active||0)+' đang chạy · '+pending+' chờ duyệt · '+ready+' đã bàn giao. '+(r.coordinator.message||'')}catch(e){$('batchStatus').textContent=e.message;notify(formatErrorToast(e),'err')}}
+async function refreshBatch(){
+ try{
+  const response=await fetch('/batch/status');
+  const r=await response.json();
+  if(!response.ok)throw Error(r.error);
+  if(serverOffline){
+   serverOffline=false;
+   try{
+    const sr=await fetch('/state');
+    if(sr.ok){
+     const s=await sr.json();
+     if(s.token)token=s.token;
+     if(s.workspace)applyWorkspace(s.workspace);
+     if(!data&&s.review)acceptState(s);
+    }
+   }catch(_){}
+   status('Đã kết nối lại máy chủ HMU thành công');
+   notify('Đã kết nối lại máy chủ HMU thành công!','success');
+  }
+  batchRows=r.jobs||[];
+  const ids=new Set(batchRows.map(x=>x.id));
+  for(const id of batchSelected)if(!ids.has(id))batchSelected.delete(id);
+  for(const id of seenFailedJobs.keys())if(!ids.has(id))seenFailedJobs.delete(id);
+  for(const j of batchRows){
+   if(j.state==='FAILED'){
+    const lastUpdated=seenFailedJobs.get(j.id);
+    if(lastUpdated!==j.updated){
+     seenFailedJobs.set(j.id,j.updated);
+     notify(formatErrorToast(j.error_detail||j.error,j.source_name),'err');
+    }
+   }
+  }
+  renderBatch();
+  const pending=batchRows.filter(x=>x.state==='NEEDS_REVIEW').length,ready=batchRows.filter(x=>x.state==='READY').length;
+  $('batchStatus').textContent=batchRows.length+' file · '+(r.coordinator.active||0)+' đang chạy · '+pending+' chờ duyệt · '+ready+' đã bàn giao. '+(r.coordinator.message||'');
+ }catch(e){
+  $('batchStatus').textContent='Mất kết nối máy chủ ('+e.message+'). Hãy bật lại MO_CONG_CU.bat';
+  if(!serverOffline){
+   serverOffline=true;
+   notify('Mất kết nối tới máy chủ HMU! Vui lòng bật lại MO_CONG_CU.bat để tiếp tục.','err');
+  }
+ }
+}
 async function pollBatch(){await refreshBatch();setTimeout(pollBatch,2000)}
 async function batchAction(path,body={}){try{const r=await request(path,JSON.stringify(body));await refreshBatch();if(r&&r.cloned_folders&&r.cloned_folders.length){notify('Đã tạo sẵn '+r.cloned_folders.length+' thư mục bệnh án trống trong Data_Deidentified','info')}return r}catch(e){status(e.message,true);notify(formatErrorToast(e),'err');return null}}
 async function openBatch(id){try{await flush();setWorking(true);const r=await request('/batch/open_job',JSON.stringify({queue_id:id}));acceptState(r);$('pageNo').focus();notify('Đã mở hồ sơ trong hàng đợi','info')}catch(e){status(e.message,true);notify(formatErrorToast(e),'err')}finally{setWorking(false)}}
@@ -341,4 +414,4 @@ $('batchDeleteSelected').onclick=()=>deleteBatch([...batchSelected]);
 $('batchStart').onclick=()=>batchAction('/batch/resume');$('batchPause').onclick=()=>batchAction('/batch/pause');$('batchFilter').onchange=renderBatch;
 $('refreshQc').onclick=async()=>{try{await flush();await loadBatchQc()}catch(e){status(e.message,true);notify(formatErrorToast(e),'err')}};
 $('compareOutput').onclick=async()=>{try{await flush();previewOutput=!previewOutput;show()}catch(e){status(e.message,true);notify(formatErrorToast(e),'err')}};
-fetch('/state').then(r=>{if(!r.ok)throw Error('Không đọc được phiên HMU');return r.json()}).then(s=>{token=s.token;data=s.review;queueId=s.queue_id;files=s.files||[];if(s.workspace)applyWorkspace(s.workspace);setMode(queueId?'batch':'local');if(data){show();if(queueId)loadBatchQc()}pollBatch()}).catch(e=>{status(e.message,true);notify(formatErrorToast(e),'err')});
+fetch('/state').then(r=>{if(!r.ok)throw Error('Không đọc được phiên HMU');return r.json()}).then(s=>{token=s.token;data=s.review;queueId=s.queue_id;files=s.files||[];if(s.workspace)applyWorkspace(s.workspace);setMode(queueId?'batch':'local');if(data){show();if(queueId)loadBatchQc()}if(s.active_task?.status==='running'&&s.active_task.task_id)resumeTask(s.active_task.task_id);pollBatch()}).catch(e=>{status(e.message,true);notify(formatErrorToast(e),'err')});
