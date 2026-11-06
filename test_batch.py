@@ -329,5 +329,73 @@ class BatchTests(unittest.TestCase):
         self.assertTrue(out_ba1.is_file())
         self.assertTrue(out_ba2.is_file())
 
+    def test_reap_active_workers_records_error_when_worker_crashes_without_error_json(self):
+        from unittest.mock import MagicMock
+        self.db = self.root / 'jobs' / 'batch' / 'queue.sqlite3'
+        ident = self.batch.enqueue(self.db, [self.pdf()])[0]
+        row = self.batch.claim_next(self.db)
+        # Advance attempts to MAX_ATTEMPTS so it transitions directly to FAILED
+        with self.batch._db(self.db) as con:
+            con.execute('UPDATE jobs SET attempts=? WHERE id=?', (self.batch.QueueLimits.MAX_ATTEMPTS, ident))
+        row = self.batch.get_job(self.db, ident)
+
+        fake_proc = MagicMock()
+        fake_proc.process.poll.return_value = 137  # OOM / SIGKILL exit code, no error_{attempt_id}.json written
+        active = {
+            ident: {
+                'process': fake_proc,
+                'attempt_id': 'deadbeef1234',
+                'started': 0.0,
+            }
+        }
+        mutated = self.batch._reap_active_workers(self.db, active, {ident: row}, timeout_seconds=900)
+        self.assertTrue(mutated)
+        self.assertEqual(active, {})
+        updated_job = self.batch.get_job(self.db, ident)
+        self.assertEqual(updated_job['state'], 'FAILED')
+        self.assertIn('Worker stopped with exit 137', updated_job['error'])
+        self.assertEqual(updated_job['result']['error_detail']['stage'], 'BATCH_WORKER')
+        self.assertTrue((self.root / 'jobs' / 'error_report.json').is_file())
+
+    def test_summary_fields_include_error_detail_for_failed_jobs(self):
+        ident = self.batch.enqueue(self.db, [self.pdf()])[0]
+        self.batch.claim_next(self.db)
+        err_detail = {
+            'id': 'err_01',
+            'category': 'CODE_ERROR',
+            'stage': 'BATCH_WORKER',
+            'message': 'Worker stopped with exit 1',
+            'source_file': 'source.pdf',
+            'code_location': {'file': 'batch_worker.py', 'line': 42, 'function': 'run'},
+        }
+        self.batch.set_stage_result(
+            self.db,
+            ident,
+            expected_state='PREPARING',
+            result={'state': 'FAILED', 'error': 'Worker stopped with exit 1', 'error_detail': err_detail},
+        )
+        summary = self.batch.list_jobs(self.db, details=False)[0]
+        self.assertEqual(summary['result'].get('error_detail'), err_detail)
+
+    def test_enqueue_batches_multiple_files_in_single_db_transaction(self):
+        from unittest.mock import patch
+        p1 = self.pdf('batch1.pdf', 'Patient 1')
+        p2 = self.pdf('batch2.pdf', 'Patient 2')
+        p3 = self.root / 'batch3_dup.pdf'
+        p3.write_bytes(p1.read_bytes())
+        p4 = self.root / 'batch4_bad.pdf'
+        p4.write_bytes(b'corrupt pdf bytes')
+
+        with patch.object(self.batch, '_db', wraps=self.batch._db) as mock_db:
+            ids = self.batch.enqueue(self.db, [p1, p2, p3, p4])
+            self.assertEqual(mock_db.call_count, 1)
+
+        self.assertEqual(len(ids), 4)
+        self.assertEqual(self.batch.get_job(self.db, ids[0])['state'], 'QUEUED')
+        self.assertEqual(self.batch.get_job(self.db, ids[1])['state'], 'QUEUED')
+        self.assertEqual(self.batch.get_job(self.db, ids[2])['state'], 'DUPLICATE')
+        self.assertEqual(self.batch.get_job(self.db, ids[2])['duplicate_of'], ids[0])
+        self.assertEqual(self.batch.get_job(self.db, ids[3])['state'], 'FAILED')
+
 
 if __name__=='__main__':unittest.main()
