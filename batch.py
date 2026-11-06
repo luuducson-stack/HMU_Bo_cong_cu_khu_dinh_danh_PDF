@@ -129,7 +129,7 @@ def discover_sources(root):
 def enqueue(db_path: Path, sources: list[Path], *, target_folders: dict | list | None = None) -> list[str]:
     import fitz
     root = Path(db_path).resolve().parent
-    ids = []
+    prepared = []
     for i, value in enumerate(sources):
         source = Path(value).resolve(strict=True)
         if not source.is_file() or source.suffix.lower() != '.pdf':
@@ -160,7 +160,10 @@ def enqueue(db_path: Path, sources: list[Path], *, target_folders: dict | list |
                 source_file=source.name,
                 category='FILE_ERROR',
             )
-        with _db(db_path) as con:
+        prepared.append((source, target_folder, digest, pages, error))
+    ids = []
+    with _db(db_path) as con:
+        for source, target_folder, digest, pages, error in prepared:
             old = con.execute('SELECT id,state,target_folder FROM jobs WHERE source_path=? AND source_sha256=?', (str(source), digest)).fetchone()
             if old:
                 if old['state'] == 'DELETING':
@@ -201,6 +204,7 @@ _SUMMARY_FIELDS = '''id,source_path,source_name,source_sha256,pages,state,job_di
     revision,attempts,error,created,updated,target_folder,
     json_object('output',json_extract(result_json,'$.output'),
       'machine_seconds',json_extract(result_json,'$.machine_seconds'),
+      'error_detail',json_extract(result_json,'$.error_detail'),
       'verification',json_object('status',json_extract(result_json,'$.verification.status'),
         'finding_count',coalesce(json_array_length(result_json,'$.verification.findings'),0),
         'unreadable_count',coalesce(json_array_length(result_json,'$.verification.unreadable_pages'),0))) AS result_json'''
@@ -439,7 +443,7 @@ def _reap_active_workers(db_path: Path, active: dict, by_id: dict, timeout_secon
                     error = {'message': f'Worker stopped with exit {code}', 'retryable': True}
             else:
                 err_record = record_error_event(
-                    root,
+                    Path(db_path).resolve().parent.parent,
                     RuntimeError(f'Worker stopped with exit {code}'),
                     stage='BATCH_WORKER',
                     source_file=row.get('source_name'),
