@@ -144,6 +144,8 @@ def enqueue(db_path: Path, sources: list[Path], *, target_folders: dict | list |
         digest = _sha(source)
         pages = 0
         error = ''
+        err_record = None
+        report_root = root.parent if root.name in {'batch', 'queue'} else root
         try:
             with fitz.open(source) as doc:
                 if doc.is_encrypted:
@@ -152,24 +154,30 @@ def enqueue(db_path: Path, sources: list[Path], *, target_folders: dict | list |
                 if not pages:
                     raise ValueError('Empty PDF')
         except Exception as exc:
-            error = 'PDF hỏng, trống hoặc có mật khẩu; cần kiểm tra nguồn.'
-            record_error_event(
-                root,
+            err_record = record_error_event(
+                report_root,
                 exc,
                 stage='BATCH_ENQUEUE',
                 source_file=source.name,
                 category='FILE_ERROR',
             )
-        prepared.append((source, target_folder, digest, pages, error))
+            rc = err_record.get('root_cause') or f"{type(exc).__name__}: {exc}"
+            error = f'PDF hỏng, trống hoặc có mật khẩu; cần kiểm tra nguồn. (Gốc lỗi: {rc})'
+        prepared.append((source, target_folder, digest, pages, error, err_record))
     ids = []
     with _db(db_path) as con:
-        for source, target_folder, digest, pages, error in prepared:
+        for source, target_folder, digest, pages, error, err_record in prepared:
             old = con.execute('SELECT id,state,target_folder FROM jobs WHERE source_path=? AND source_sha256=?', (str(source), digest)).fetchone()
             if old:
                 if old['state'] == 'DELETING':
                     raise ValueError('Mục đang xóa; hoàn tất xóa trước khi thêm lại nguồn')
                 if target_folder and old['target_folder'] != target_folder:
                     con.execute('UPDATE jobs SET target_folder=? WHERE id=?', (target_folder, old['id']))
+                if old['state'] == 'FAILED' and err_record:
+                    con.execute(
+                        'UPDATE jobs SET error=?,result_json=?,updated=? WHERE id=?',
+                        (error, json.dumps({'error_detail': {**err_record, 'job_id': old['id'], 'queue_id': old['id']}}, ensure_ascii=False), time.time(), old['id']),
+                    )
                 ids.append(old['id'])
                 continue
             duplicate = con.execute(
@@ -179,12 +187,13 @@ def enqueue(db_path: Path, sources: list[Path], *, target_folders: dict | list |
             ident = secrets.token_hex(16)
             now = time.time()
             state = 'FAILED' if error else ('DUPLICATE' if duplicate else 'QUEUED')
+            res_json = json.dumps({'error_detail': {**err_record, 'job_id': ident, 'queue_id': ident}}, ensure_ascii=False) if err_record else '{}'
             con.execute(
                 '''INSERT INTO jobs
-                (id,source_path,source_name,source_sha256,pages,state,job_dir,duplicate_of,error,created,updated,target_folder)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
+                (id,source_path,source_name,source_sha256,pages,state,job_dir,duplicate_of,error,created,updated,result_json,target_folder)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                 (ident, str(source), source.name, digest, pages, state, str(root / 'jobs' / ident),
-                 duplicate['id'] if duplicate else None, error, now, now, target_folder),
+                 duplicate['id'] if duplicate else None, error, now, now, res_json, target_folder),
             )
             ids.append(ident)
     return ids
@@ -250,9 +259,10 @@ def _write_stage_result(con, row, result):
     revision = result.get('revision', row['revision'])
     if type(revision) is not int or revision < row['revision']:
         raise ValueError('Review revision changed')
+    pages = result['pages'] if type(result.get('pages')) is int and result['pages'] > 0 else row['pages']
     con.execute(
-        'UPDATE jobs SET state=?,revision=?,result_json=?,error=?,updated=? WHERE id=?',
-        (state, revision, json.dumps(result, ensure_ascii=False), str(result.get('error', '')), time.time(), row['id']),
+        'UPDATE jobs SET state=?,revision=?,pages=?,result_json=?,error=?,updated=? WHERE id=?',
+        (state, revision, pages, json.dumps(result, ensure_ascii=False), str(result.get('error', '')), time.time(), row['id']),
     )
 
 
@@ -442,17 +452,32 @@ def _reap_active_workers(db_path: Path, active: dict, by_id: dict, timeout_secon
                 except Exception:
                     error = {'message': f'Worker stopped with exit {code}', 'retryable': True}
             else:
+                log_path = Path(row['job_dir']) / f"worker_{work['attempt_id']}.log"
+                log_tail = ''
+                if log_path.is_file():
+                    try:
+                        lines = [ln.strip() for ln in log_path.read_text(encoding='utf8', errors='replace').splitlines() if ln.strip()]
+                        if lines:
+                            log_tail = lines[-1]
+                    except Exception:
+                        pass
+                err_msg = f'Worker stopped with exit {code}' + (f' (Gốc lỗi: {log_tail})' if log_tail else '')
                 err_record = record_error_event(
                     Path(db_path).resolve().parent.parent,
-                    RuntimeError(f'Worker stopped with exit {code}'),
+                    RuntimeError(err_msg),
                     stage='BATCH_WORKER',
                     source_file=row.get('source_name'),
                     job_id=ident,
                     queue_id=ident,
+                    root_cause=log_tail or f'Worker exit code {code}',
                 )
                 error = {**err_record, 'retryable': True}
             retry = bool(error.get('retryable')) and row['attempts'] < QueueLimits.MAX_ATTEMPTS
-            finish_worker(db_path, ident, {'state': 'QUEUED' if retry else 'FAILED', 'error': error.get('message', ''), 'error_detail': error})
+            msg_out = error.get('message', '')
+            rc_out = error.get('root_cause', '')
+            if rc_out and rc_out not in msg_out:
+                msg_out = f"{msg_out} (Gốc lỗi: {rc_out})" if msg_out else rc_out
+            finish_worker(db_path, ident, {'state': 'QUEUED' if retry else 'FAILED', 'error': msg_out, 'error_detail': error})
     return mutated
 
 
@@ -618,7 +643,8 @@ def review_lock(db_path, job_id):
     row = get_job(db_path, job_id)
     with queue_lock(Path(row['job_dir']) / 'review_operation'):
         row = get_job(db_path, job_id)
-        if row['state'] not in {'NEEDS_REVIEW', 'READY'}:
+        has_review = (Path(row['job_dir']) / 'review' / 'review.json').is_file()
+        if row['state'] not in {'NEEDS_REVIEW', 'READY'} and not (row['state'] == 'FAILED' and has_review):
             raise ValueError('File đang xử lý; chờ PDF để duyệt')
         yield row
 
@@ -691,23 +717,68 @@ def cancel_job(db_path, job_id):
 
 
 def retry_job(db_path, job_id):
+    import fitz
     from batch_worker import processing_fingerprint
     row = get_job(db_path, job_id)
     if row['state'] not in {'FAILED', 'CANCELLED'}:
         raise ValueError('Chỉ thử lại file lỗi hoặc đã hủy')
-    if _sha(row['source_path']) != row['source_sha256']:
-        raise ValueError('Nguồn đã đổi; thêm lại file mới')
-    # Preserve all old generations; a changed engine must never bless an old fingerprint.
+    source_path = Path(row['source_path'])
+    if not source_path.is_file():
+        raise ValueError(f'Không tìm thấy file nguồn: {source_path}')
+    current_sha = _sha(source_path)
+    sha_changed = current_sha != row['source_sha256']
+    pages = row['pages']
+    if sha_changed or not pages:
+        try:
+            with fitz.open(source_path) as doc:
+                if not doc.is_encrypted and len(doc) > 0:
+                    pages = len(doc)
+        except Exception:
+            pass
+    # Preserve all old generations; a changed engine or changed source must never bless an old fingerprint.
     checkpoint = Path(row['job_dir']) / 'prepare_checkpoint.json'
-    compatible = not checkpoint.exists() or json.loads(checkpoint.read_text(encoding='utf8')) == processing_fingerprint(row)
+    compatible = (not sha_changed) and (
+        not checkpoint.exists() or json.loads(checkpoint.read_text(encoding='utf8')) == processing_fingerprint(row)
+    )
     new_dir = Path(row['job_dir']) if compatible else Path(db_path).resolve().parent / 'jobs' / f"{job_id}_{secrets.token_hex(8)}"
     with _db(db_path) as con:
+        conflict = con.execute(
+            'SELECT id FROM jobs WHERE source_path=? AND source_sha256=? AND id!=?',
+            (str(source_path), current_sha, job_id),
+        ).fetchone()
+        sha_to_save = row['source_sha256'] if conflict else current_sha
         updated = con.execute(
-            "UPDATE jobs SET state='QUEUED',job_dir=?,revision=?,attempts=0,error='',result_json='{}',updated=? WHERE id=? AND state=?",
-            (str(new_dir), row['revision'] if compatible else 0, time.time(), job_id, row['state']),
+            "UPDATE jobs SET state='QUEUED',source_sha256=?,pages=?,job_dir=?,revision=?,attempts=0,error='',result_json='{}',updated=? WHERE id=? AND state=?",
+            (sha_to_save, pages, str(new_dir), row['revision'] if compatible else 0, time.time(), job_id, row['state']),
         ).rowcount
         if updated != 1:
             raise ValueError('Queue state changed')
+
+
+def retry_jobs(db_path, job_ids) -> dict:
+    if not isinstance(job_ids, list) or not 1 <= len(job_ids) <= 2000:
+        raise ValueError('Chọn ít nhất một mục lỗi để thử lại')
+    ordered = []
+    seen = set()
+    for ident in job_ids:
+        if not isinstance(ident, str) or not re.fullmatch(r'[0-9a-f]{32}', ident):
+            raise ValueError('Invalid queue job ID')
+        if ident not in seen:
+            seen.add(ident)
+            ordered.append(ident)
+    retried = []
+    skipped = []
+    for ident in ordered:
+        row = get_job(db_path, ident)
+        if row['state'] not in {'FAILED', 'CANCELLED'}:
+            skipped.append({'id': ident, 'source_name': row['source_name'], 'reason': 'Chỉ thử lại mục lỗi hoặc đã hủy'})
+            continue
+        try:
+            retry_job(db_path, ident)
+            retried.append(ident)
+        except Exception as exc:
+            skipped.append({'id': ident, 'source_name': row['source_name'], 'reason': str(exc)})
+    return {'retried': retried, 'skipped': skipped}
 
 
 def _deletable_work_dir(db_path, row):
