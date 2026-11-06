@@ -59,6 +59,23 @@ def extract_code_location(exc: BaseException) -> dict | None:
     }
 
 
+def extract_root_cause(exc: BaseException | str) -> str:
+    if not isinstance(exc, BaseException):
+        return str(exc)
+    chain = []
+    cur: BaseException | None = exc
+    seen: set[int] = set()
+    while cur is not None and id(cur) not in seen and len(chain) < 5:
+        seen.add(id(cur))
+        text = str(cur).strip()
+        name = type(cur).__name__
+        entry = f"{name}: {text}" if text and not text.startswith(name + ":") else (text or name)
+        if not chain or chain[-1] != entry:
+            chain.append(entry)
+        cur = getattr(cur, '__cause__', None) or getattr(cur, '__context__', None)
+    return " <- ".join(chain)
+
+
 def classify_error(exc: BaseException | str, stage: str | None = None, message: str | None = None) -> str:
     msg_str = (str(message) if message else str(exc)).lower()
     exc_type = type(exc).__name__ if isinstance(exc, BaseException) else str(exc)
@@ -112,6 +129,7 @@ def record_error_event(
     queue_id: str | None = None,
     http_path: str | None = None,
     category: str | None = None,
+    root_cause: str | None = None,
 ) -> dict:
     now_ts = time.time()
     iso = iso_now()
@@ -119,6 +137,7 @@ def record_error_event(
     err_type = type(exc).__name__ if isinstance(exc, BaseException) else "Error"
     code_loc = extract_code_location(exc) if isinstance(exc, BaseException) else None
     cat = category or classify_error(exc, stage=stage, message=msg)
+    rc = root_cause or extract_root_cause(exc)
 
     err_id = f"err_{int(now_ts * 1000):x}_{secrets.token_hex(4)}"
     record = {
@@ -132,6 +151,7 @@ def record_error_event(
         'queue_id': queue_id,
         'error_type': err_type,
         'message': msg,
+        'root_cause': rc,
         'code_location': code_loc,
     }
     if http_path:
