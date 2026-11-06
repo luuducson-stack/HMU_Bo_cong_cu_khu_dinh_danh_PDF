@@ -1,5 +1,5 @@
 """Single-user localhost review application v2.0; no cloud services."""
-import argparse, json, re, secrets, threading, time, unicodedata, urllib.parse, webbrowser
+import argparse, json, os, re, secrets, threading, time, unicodedata, urllib.parse, urllib.request, webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from delivery import (
@@ -200,6 +200,12 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
     progress = {'status': 'idle', 'task_id': None, 'progress': '', 'result': None, 'error': None}
     batch_db=root/'batch'/'queue.sqlite3';active_queue_id=None
     session_path=root/'last_session.json'
+    if batch_db.exists():
+        try:
+            with batch.queue_lock(batch_db):
+                batch.recover_queue(batch_db)
+        except Exception:
+            pass
 
     def save_session():
         try:
@@ -211,9 +217,10 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
         rows=batch.list_jobs(batch_db,details=False);items=[]
         for row in rows:
             qc=row['result'].get('verification',{})
-            item={k:row[k] for k in ('id','source_name','pages','state','error','duplicate_of','revision')}
+            item={k:row[k] for k in ('id','source_name','pages','state','error','duplicate_of','revision','updated')}
             item.update(qc_status=qc.get('status'),warnings=qc.get('finding_count',0)+qc.get('unreadable_count',0),
-                        seconds=row['result'].get('machine_seconds'),download=bool(row['result'].get('output')))
+                        seconds=row['result'].get('machine_seconds'),download=bool(row['result'].get('output')),
+                        error_detail=row['result'].get('error_detail'))
             items.append(item)
         status_path=batch_db.parent/'coordinator_status.json'
         status=json.loads(status_path.read_text(encoding='utf8')) if status_path.exists() else {}
@@ -388,7 +395,7 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                 sub = read_review(job)
                 files.append({'index': item['index'], 'name': item['source_name'], 'job_id': sub['job_id'],
                               'reviewed': sum(bool(p['reviewed']) for p in sub['pages']), 'pages': len(sub['pages'])})
-        return {'review': d, 'files': files, 'batch_case': bool(case_root),'queue_id':active_queue_id, 'workspace': get_workspace_config(root)}
+        return {'review': d, 'files': files, 'batch_case': bool(case_root),'queue_id':active_queue_id, 'workspace': get_workspace_config(root), 'active_task': dict(progress) if progress['status'] == 'running' else None}
 
     def check_identity(req):
         if not active:
@@ -440,13 +447,13 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
             if not self.host_ok(): self.send(403, {'error':'Forbidden'}); return
             u = urllib.parse.urlsplit(self.path); q = urllib.parse.parse_qs(u.query); path = u.path
             try:
+                if path == '/':
+                    self.send(200, Path(__file__).with_name('review.html').read_bytes(), 'text/html; charset=utf-8'); return
+                if path in {'/ui/review.js', '/ui/review.css'}:
+                    asset = Path(__file__).parent / path.lstrip('/')
+                    mime = 'text/javascript' if asset.suffix == '.js' else 'text/css'
+                    self.send(200, asset.read_bytes(), mime + '; charset=utf-8'); return
                 with lock:
-                    if path == '/':
-                        self.send(200, Path(__file__).with_name('review.html').read_bytes(), 'text/html; charset=utf-8'); return
-                    if path in {'/ui/review.js', '/ui/review.css'}:
-                        asset = Path(__file__).parent / path.lstrip('/')
-                        mime = 'text/javascript' if asset.suffix == '.js' else 'text/css'
-                        self.send(200, asset.read_bytes(), mime + '; charset=utf-8'); return
                     if path == '/progress':
                         if q.get('task_id', [''])[0] != progress['task_id']: raise Conflict('Unknown or expired task')
                         self.send(200, dict(progress)); return
@@ -723,12 +730,53 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
     return server
 
 
+def _configure_windows_console() -> None:
+    if os.name != 'nt':
+        return
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        STD_INPUT_HANDLE = -10
+        ENABLE_QUICK_EDIT_MODE = 0x0040
+        ENABLE_EXTENDED_FLAGS = 0x0080
+        handle = kernel32.GetStdHandle(STD_INPUT_HANDLE)
+        if handle and handle != -1:
+            mode = ctypes.c_uint32()
+            if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+                new_mode = (mode.value & ~ENABLE_QUICK_EDIT_MODE) | ENABLE_EXTENDED_FLAGS
+                kernel32.SetConsoleMode(handle, new_mode)
+        kernel32.SetConsoleTitleW("HMU - Công cụ Khử Định Danh PDF (KHÔNG ĐÓNG CỬA SỔ NÀY)")
+    except Exception:
+        pass
+
+
+def _is_hmu_server_running(port: int) -> bool:
+    url = f'http://127.0.0.1:{port}/batch/status'
+    req = urllib.request.Request(url, headers={'Host': f'127.0.0.1:{port}'})
+    try:
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            if resp.status != 200:
+                return False
+            data = json.loads(resp.read().decode('utf-8'))
+            return isinstance(data, dict) and 'jobs' in data
+    except Exception:
+        return False
+
+
 def main():
+    _configure_windows_console()
     ap=argparse.ArgumentParser();ap.add_argument('--job');ap.add_argument('--port',type=int,default=8765)
     ap.add_argument('--root',default='HMU_JOBS');ap.add_argument('--no-browser',action='store_true');args=ap.parse_args()
     root_path=Path(args.root)
     try:server=create_server(root_path,Path(args.job) if args.job else None,args.port)
     except OSError as exc:
+        if _is_hmu_server_running(args.port):
+            url = f'http://127.0.0.1:{args.port}'
+            print(f"\n[HMU THÔNG BÁO] Phiên làm việc HMU đang chạy sẵn tại: {url}")
+            print("[HMU THÔNG BÁO] Đang tự động mở lại giao diện trình duyệt cho bạn...")
+            if not args.no_browser:
+                webbrowser.open(url)
+            raise SystemExit(0)
         record_error_event(root_path,exc,stage='STARTUP')
         report_file=root_path/'error_report.json'
         print(f"\n[HMU LỖI] Không mở được cổng {args.port}: {exc}")
@@ -743,6 +791,9 @@ def main():
             print(f"[HMU BÁO LỖI] Chi tiết lỗi đã ghi tại: {report_file.resolve()}")
         raise
     url=f'http://127.0.0.1:{server.server_port}';print('HMU PDF review: '+url)
+    print('========================================================================')
+    print('LƯU Ý: KHÔNG ĐÓNG CỬA SỔ ĐEN NÀY KHI ĐANG DUYỆT BỆNH ÁN (Hãy thu nhỏ xuống thanh Taskbar)')
+    print('========================================================================')
     if not args.no_browser:webbrowser.open(url)
     try:server.serve_forever()
     except KeyboardInterrupt:pass
