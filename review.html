@@ -114,7 +114,7 @@ aside { padding: 12px; background: white; border-radius: 10px; min-width: 0; }
 <button type="button" id="pickBatchFolder">Chọn thư mục…</button> <button id="batchAdd">Thêm vào hàng đợi</button> <button id="batchStart" class="primary">Chạy / tiếp tục</button> <button id="batchPause">Tạm dừng nhận file mới</button>
 <label>Lọc <select id="batchFilter"><option value="">Tất cả</option><option value="NEEDS_REVIEW">Chờ duyệt</option><option value="RUNNING">Đang xử lý</option><option value="QUEUED">Chờ xử lý</option><option value="READY">Đã bàn giao</option><option value="FAILED">Lỗi</option></select></label>
 <p id="batchStatus" role="status" aria-live="polite">Chưa có file trong hàng đợi.</p>
-<p><button id="batchSelectAll">Chọn tất cả đang hiển thị</button> <button id="batchClearSelection">Bỏ chọn</button> <button id="batchDeleteSelected" disabled>Xóa đã chọn</button> <span id="batchSelectedCount">0 đã chọn</span></p>
+<p><button id="batchSelectAll">Chọn tất cả đang hiển thị</button> <button id="batchClearSelection">Bỏ chọn</button> <button id="batchRetrySelected" disabled>Thử lại đã chọn</button> <button id="batchDeleteSelected" disabled>Xóa đã chọn</button> <span id="batchSelectedCount">0 đã chọn</span></p>
 <div id="batchList" class="result"></div>
 <div id="batchResult" class="result" role="status" aria-live="polite"></div>
 </section>
@@ -158,7 +158,7 @@ aside { padding: 12px; background: white; border-radius: 10px; min-width: 0; }
 let workspaceMode='local';
 const folderDestinations={local:'',batch:''};
 let queueId=null,batchRows=[],batchIssues=[],previewOutput=false;
-const batchSelected=new Set();
+const batchSelected=new Set(),retryingIds=new Set(),autoOpenedRetries=new Set();
 const batchLabels={QUEUED:'Chờ xử lý',PREPARING:'Đang phân tích',EXPORTING:'Đang khử / xuất',VERIFYING:'Đang kiểm PDF',NEEDS_REVIEW:'Chờ duyệt',READY:'Đã bàn giao',FAILED:'Lỗi',CANCELLING:'Đang dừng tiến trình',CANCELLED:'Đã hủy',DUPLICATE:'Trùng nội dung',DELETING:'Xóa chưa xong — thử Xóa lại'};
 let token='',data=null,pn=0,img=new Image(),manual=false,start=null,preview=null,files=[],dirty=false,editVersion=0,working=false;
 let saveQueue=Promise.resolve();
@@ -268,14 +268,34 @@ function formatErrorToast(errOrDetail,fallbackFile){
  }
  const src=(detail&&detail.source_file)||fallbackFile||null;
  const loc=detail&&detail.code_location;
+ let out=msg;
  if(detail&&detail.category==='CODE_ERROR'&&loc&&loc.file){
-  return '[Lỗi Code: '+loc.file+':'+loc.line+'] '+msg;
+  out='[Lỗi Code: '+loc.file+':'+loc.line+'] '+msg;
+  if(src&&!out.includes(src))out+=' · File: '+src;
+ }else if(src||(detail&&detail.category==='FILE_ERROR')){
+  out='[Lỗi File: '+(src||'Tệp')+'] '+msg;
+ }else if(detail&&detail.category==='CONFLICT_ERROR'){
+  out='[Lỗi Xung đột] '+msg;
  }
- if(src||(detail&&detail.category==='FILE_ERROR')){
-  return '[Lỗi File: '+(src||'Tệp')+'] '+msg;
+ if(detail&&detail.root_cause&&!out.includes(detail.root_cause)){
+  out+=' · Gốc lỗi: '+detail.root_cause;
+ }else if(detail&&detail.error_type&&detail.error_type!=='Error'&&!out.includes(detail.error_type)){
+  out+=' ('+detail.error_type+')';
  }
- if(detail&&detail.category==='CONFLICT_ERROR'){
-  return '[Lỗi Xung đột] '+msg;
+ return out;
+}
+function formatBatchRowError(r){
+ const d=r.error_detail;
+ let msg=r.error||(d&&d.message)||'';
+ if(!msg&&!d)return '';
+ if(d&&d.root_cause&&!msg.includes(d.root_cause)){
+  msg=(msg?msg+' · ':'')+'Gốc lỗi: '+d.root_cause;
+ }
+ if(d&&d.error_type&&d.error_type!=='Error'&&!msg.includes(d.error_type)){
+  msg+=' ['+d.error_type+']';
+ }
+ if(d&&d.code_location&&d.code_location.file&&!msg.includes(d.code_location.file)){
+  msg+=' @ '+d.code_location.file+':'+d.code_location.line;
  }
  return msg;
 }
@@ -390,21 +410,28 @@ $('loadPath').onclick=async()=>{
  }catch(e){status('Lỗi: '+e.message,true);notify(formatErrorToast(e,p.split(/[\\/]/).pop()),'err')}finally{setWorking(false)}
 };
 function batchButton(label,action){const b=document.createElement('button');b.textContent=label;b.onclick=action;b.disabled=working;return b}
-function filteredBatchRows(){const filter=$('batchFilter').value;return batchRows.filter(r=>!filter||r.state===filter||(filter==='RUNNING'&&['PREPARING','EXPORTING','VERIFYING'].includes(r.state)))}
+function filteredBatchRows(){const filter=$('batchFilter').value;return batchRows.filter(r=>!filter||r.state===filter||(filter==='RUNNING'&&['PREPARING','EXPORTING','VERIFYING'].includes(r.state))||(filter==='FAILED'&&retryingIds.has(r.id)))}
 function renderBatch(){
  const box=$('batchList');box.replaceChildren();
  filteredBatchRows().forEach(r=>{
   const row=document.createElement('div');row.className='item';
   const check=document.createElement('input');check.type='checkbox';check.checked=batchSelected.has(r.id);check.disabled=working;check.setAttribute('aria-label','Chọn '+r.source_name);
   check.onchange=()=>{if(check.checked)batchSelected.add(r.id);else batchSelected.delete(r.id);renderBatch()};
-  const t=document.createElement('span');t.textContent=r.source_name+' · '+r.pages+' trang · '+batchLabels[r.state]+(r.qc_status?' · QC: '+r.qc_status+' ('+r.warnings+' cảnh báo)':'')+(r.error?' · '+r.error:'');row.append(check,t);
+  const errText=formatBatchRowError(r);
+  const t=document.createElement('span');t.textContent=r.source_name+' · '+r.pages+' trang · '+batchLabels[r.state]+(r.qc_status?' · QC: '+r.qc_status+' ('+r.warnings+' cảnh báo)':'')+(errText?' · '+errText:'');row.append(check,t);
   if(['NEEDS_REVIEW','READY'].includes(r.state))row.append(batchButton('Mở / duyệt',()=>openBatch(r.id)));
-  if(['FAILED','CANCELLED'].includes(r.state))row.append(batchButton('Thử lại',()=>batchAction('/batch/retry',{queue_id:r.id})));
+  if(['FAILED','CANCELLED'].includes(r.state)){
+   row.append(batchButton('Thử lại',()=>retryBatch([r.id])));
+   if(r.can_open||r.source_path)row.append(batchButton(r.can_open?'Mở / duyệt':'Mở thử',()=>testFailedBatchFile(r)));
+  }
   if(['QUEUED','PREPARING','EXPORTING','VERIFYING'].includes(r.state))row.append(batchButton('Hủy xử lý',()=>batchAction('/batch/cancel',{queue_id:r.id})));
   if(r.state==='DUPLICATE')row.append(batchButton('Mở bản gốc',()=>openBatch(r.duplicate_of)));
   row.append(batchButton('Xóa',()=>deleteBatch([r.id])));box.append(row);
  });
- $('batchSelectedCount').textContent=batchSelected.size+' đã chọn';$('batchDeleteSelected').disabled=working||!batchSelected.size;
+ const hasRetryableSelected=[...batchSelected].some(id=>{const row=batchRows.find(x=>x.id===id);return row&&['FAILED','CANCELLED'].includes(row.state)});
+ $('batchSelectedCount').textContent=batchSelected.size+' đã chọn';
+ if($('batchRetrySelected'))$('batchRetrySelected').disabled=working||!hasRetryableSelected;
+ $('batchDeleteSelected').disabled=working||!batchSelected.size;
  updateFileNav();
 }
 async function refreshBatch(){
@@ -429,7 +456,10 @@ async function refreshBatch(){
   batchRows=r.jobs||[];
   const ids=new Set(batchRows.map(x=>x.id));
   for(const id of batchSelected)if(!ids.has(id))batchSelected.delete(id);
+  for(const id of retryingIds)if(!ids.has(id))retryingIds.delete(id);
+  for(const id of autoOpenedRetries)if(!ids.has(id))autoOpenedRetries.delete(id);
   for(const id of seenFailedJobs.keys())if(!ids.has(id))seenFailedJobs.delete(id);
+  let autoOpenId=null;
   for(const j of batchRows){
    if(j.state==='FAILED'){
     const lastUpdated=seenFailedJobs.get(j.id);
@@ -437,11 +467,17 @@ async function refreshBatch(){
      seenFailedJobs.set(j.id,j.updated);
      notify(formatErrorToast(j.error_detail||j.error,j.source_name),'err');
     }
+   }else if(retryingIds.has(j.id)&&j.state==='NEEDS_REVIEW'&&!autoOpenedRetries.has(j.id)){
+    autoOpenedRetries.add(j.id);
+    if(!autoOpenId)autoOpenId=j.id;
    }
   }
   renderBatch();
   const pending=batchRows.filter(x=>x.state==='NEEDS_REVIEW').length,ready=batchRows.filter(x=>x.state==='READY').length;
   $('batchStatus').textContent=batchRows.length+' file · '+(r.coordinator.active||0)+' đang chạy · '+pending+' chờ duyệt · '+ready+' đã bàn giao. '+(r.coordinator.message||'');
+  if(autoOpenId&&!dirty&&!working){
+   await openBatch(autoOpenId);
+  }
  }catch(e){
   $('batchStatus').textContent='Mất kết nối máy chủ ('+e.message+'). Hãy bật lại MO_CONG_CU.bat';
   if(!serverOffline){
@@ -452,6 +488,42 @@ async function refreshBatch(){
 }
 async function pollBatch(){await refreshBatch();setTimeout(pollBatch,2000)}
 async function batchAction(path,body={}){try{const r=await request(path,JSON.stringify(body));await refreshBatch();if(r&&r.cloned_folders&&r.cloned_folders.length){notify('Đã tạo sẵn '+r.cloned_folders.length+' thư mục bệnh án trống trong Data_Deidentified','info')}return r}catch(e){status(e.message,true);notify(formatErrorToast(e),'err');return null}}
+async function retryBatch(ids){
+ const retryable=ids.filter(id=>{const r=batchRows.find(x=>x.id===id);return !r||['FAILED','CANCELLED'].includes(r.state)});
+ const targetIds=retryable.length?retryable:ids;
+ if(!targetIds.length)return null;
+ targetIds.forEach(id=>{retryingIds.add(id);autoOpenedRetries.delete(id);seenFailedJobs.delete(id)});
+ const body=targetIds.length===1?{queue_id:targetIds[0]}:{queue_ids:targetIds};
+ const r=await batchAction('/batch/retry',body);
+ if(r&&r.retried&&r.retried.length){
+  notify('Đã xếp hàng thử lại '+r.retried.length+' file và khởi động tiến trình xử lý','info');
+ }
+ return r;
+}
+async function testFailedBatchFile(r){
+ if(!r)return;
+ if(r.can_open||['NEEDS_REVIEW','READY'].includes(r.state)){
+  return await openBatch(r.id);
+ }
+ if(!r.source_path)return;
+ try{
+  await flush();
+  setWorking(true);
+  $('busy').textContent='';
+  const dest=$('folderDestination').value.trim();
+  const payload={path:r.source_path,study_id:'TEST_'+r.id.slice(0,8)};
+  if(dest)payload.destination=dest;
+  const res=await requestAsync('/open_path',JSON.stringify(payload),{'Content-Type':'application/json'},'Đang mở thử file lỗi để kiểm tra…');
+  $('folderResult').replaceChildren();
+  acceptState(res);
+  notify('Đã mở thử file: '+r.source_name,'info');
+ }catch(e){
+  status('Lỗi: '+e.message,true);
+  notify(formatErrorToast(e,r.source_name),'err');
+ }finally{
+  setWorking(false);
+ }
+}
 async function openBatch(id){try{await flush();setWorking(true);const r=await request('/batch/open_job',JSON.stringify({queue_id:id}));acceptState(r);$('pageNo').focus();notify('Đã mở hồ sơ trong hàng đợi','info')}catch(e){status(e.message,true);notify(formatErrorToast(e),'err')}finally{setWorking(false)}}
 async function loadBatchQc(){if(!queueId||!data)return;const id=queueId,job=data.job_id,revision=data.revision;try{const r=await fetch('/batch/qc?queue_id='+id+'&revision='+revision);const qc=await r.json();if(queueId!==id||!data||data.job_id!==job||data.revision!==revision)return;if(!r.ok)throw Error(qc.error);batchIssues=qc.issues;renderIssues();$('download').classList.remove('hide');$('download').href='/batch/pdf?queue_id='+id+'&revision='+revision;$('download').download=qc.filename||'CASE_'+id.slice(0,16)+'_DRAFT.pdf'}catch(e){if(queueId===id){batchIssues=[];renderIssues();$('qcStatus').textContent=e.message;$('download').classList.add('hide')}}}
 function renderIssues(){const box=$('qcIssues');if(!box)return;box.replaceChildren();$('batchReview').classList.toggle('hide',!queueId||workspaceMode!=='batch');$('qcStatus').textContent=batchIssues.filter(f=>!f.resolved).length+' cảnh báo chưa xử lý. Kiểm toàn bộ trang, kể cả trang không có cờ.';batchIssues.forEach(f=>{const row=document.createElement('div');row.className='item';const t=document.createElement('span');t.textContent='Trang '+f.page+' · '+f.kind+' · '+f.text+(f.resolved?' · Đã xác nhận':'');row.append(t,batchButton('Đến trang',()=>navigate(f.page-1)));if(!f.resolved)row.append(batchButton('Xác nhận giữ',async()=>{await flush();const reason=$('qcReason').value,reviewer=$('qcReviewer').value;const r=await batchAction('/batch/resolve_finding',{queue_id:queueId,revision:data.revision,finding_id:f.id,reason,reviewer});if(r)await loadBatchQc()}));box.append(row)})}
@@ -567,8 +639,9 @@ async function exportFolder(){
 $('exportFolder').onclick=exportFolder;
 $('batchAdd').onclick=()=>{const dest=$('folderDestination').value.trim();batchAction('/batch/enqueue',{paths:batchPaths(),...(dest?{destination:dest}:{})})};
 $('batchSelectAll').onclick=()=>{filteredBatchRows().forEach(r=>batchSelected.add(r.id));renderBatch()};$('batchClearSelection').onclick=()=>{batchSelected.clear();renderBatch()};
+if($('batchRetrySelected'))$('batchRetrySelected').onclick=()=>retryBatch([...batchSelected]);
 $('batchDeleteSelected').onclick=()=>deleteBatch([...batchSelected]);
-$('batchStart').onclick=()=>batchAction('/batch/resume');$('batchPause').onclick=()=>batchAction('/batch/pause');$('batchFilter').onchange=renderBatch;
+$('batchStart').onclick=()=>batchAction('/batch/resume');$('batchPause').onclick=()=>batchAction('/batch/pause');$('batchFilter').onchange=()=>{if($('batchFilter').value!=='FAILED'){retryingIds.clear();autoOpenedRetries.clear()}renderBatch()};
 $('refreshQc').onclick=async()=>{try{await flush();await loadBatchQc()}catch(e){status(e.message,true);notify(formatErrorToast(e),'err')}};
 $('compareOutput').onclick=async()=>{try{await flush();previewOutput=!previewOutput;show()}catch(e){status(e.message,true);notify(formatErrorToast(e),'err')}};
 fetch('/state').then(r=>{if(!r.ok)throw Error('Không đọc được phiên HMU');return r.json()}).then(s=>{token=s.token;data=s.review;queueId=s.queue_id;files=s.files||[];if(s.workspace)applyWorkspace(s.workspace);setMode(queueId?'batch':'local');if(data){show();if(queueId)loadBatchQc()}if(s.active_task?.status==='running'&&s.active_task.task_id)resumeTask(s.active_task.task_id);pollBatch()}).catch(e=>{status(e.message,true);notify(formatErrorToast(e),'err')});
