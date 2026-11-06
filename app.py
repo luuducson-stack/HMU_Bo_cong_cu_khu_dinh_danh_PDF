@@ -217,9 +217,10 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
         rows=batch.list_jobs(batch_db,details=False);items=[]
         for row in rows:
             qc=row['result'].get('verification',{})
-            item={k:row[k] for k in ('id','source_name','pages','state','error','duplicate_of','revision','updated')}
+            item={k:row[k] for k in ('id','source_path','source_name','pages','state','error','duplicate_of','revision','updated')}
             item.update(qc_status=qc.get('status'),warnings=qc.get('finding_count',0)+qc.get('unreadable_count',0),
                         seconds=row['result'].get('machine_seconds'),download=bool(row['result'].get('output')),
+                        can_open=(Path(row['job_dir'])/'review'/'review.json').is_file(),
                         error_detail=row['result'].get('error_detail'))
             items.append(item)
         status_path=batch_db.parent/'coordinator_status.json'
@@ -270,12 +271,25 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
             return result
         if path=='/batch/release_folder':
             return batch.release_folder(batch_db,req.get('paths'),req.get('destination'))
+        if path=='/batch/retry':
+            if req.get('queue_ids') is not None:
+                res=batch.retry_jobs(batch_db,req.get('queue_ids'))
+                retried=res['retried']
+                skipped=res['skipped']
+            else:
+                ident=req.get('queue_id')
+                batch.retry_job(batch_db,ident)
+                retried=[ident]
+                skipped=[]
+            if retried:
+                batch.resume_queue(batch_db)
+                if not batch_status()['coordinator']['running']:batch.start_background(batch_db)
+            return {'queued':bool(retried),'retried':retried,'skipped':skipped}
         ident=req.get('queue_id');row=batch.get_job(batch_db,ident)
         if path=='/batch/open_job':
             with batch.review_lock(batch_db,ident) as row:
                 active=Path(row['job_dir'])/'review';case_root=None;active_queue_id=ident
                 validated_jobs.clear();save_session();return state()
-        if path=='/batch/retry':batch.retry_job(batch_db,ident);return {'queued':True}
         if path=='/batch/cancel':batch.cancel_job(batch_db,ident);return {'cancelled':True}
         if path=='/batch/reprocess':
             batch.reprocess_job(batch_db,ident,expected_revision=req.get('revision'))
@@ -403,7 +417,7 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
         d = read_review(active)
         if active_queue_id:
             row=batch.get_job(batch_db,active_queue_id)
-            if row['state'] not in {'NEEDS_REVIEW','READY'} or Path(row['job_dir'])/'review'!=active:
+            if row['state'] not in {'NEEDS_REVIEW','READY','FAILED'} or Path(row['job_dir'])/'review'!=active:
                 raise Conflict('File đang được xử lý lại; hãy mở lại từ hàng đợi khi hoàn tất')
         if type(req.get('revision')) is not int or req.get('job_id') != d['job_id'] or req.get('revision') != d['revision']:
             raise Conflict('Công việc hoặc phiên duyệt đã thay đổi. Hãy tải lại trạng thái trước khi lưu.')
