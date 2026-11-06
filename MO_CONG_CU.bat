@@ -2,6 +2,9 @@
 chcp 65001 >nul
 set PYTHONIOENCODING=utf-8
 cd /d "%~dp0"
+echo ========================================================================
+echo LUU Y: KHONG DONG CUA SO DEN NAY KHI DANG DUYET BENH AN (Hay thu nho xuong thanh Taskbar)
+echo ========================================================================
 if not exist ".venv\Scripts\python.exe" goto missing_venv
 ".venv\Scripts\python.exe" -c "import pathlib, sys; bad=[p.name for p in sorted(pathlib.Path('.').glob('*.py')) if b'\x00' in p.read_bytes() or p.read_bytes().startswith(b'\xff')]; sys.exit(print('[HMU LOI] Phat hien file ma nguon bi hong (0xFF/null bytes) do loi sao chep USB:', ', '.join(bad)) or 1 if bad else 0)"
 if errorlevel 1 goto app_fail
@@ -22,5 +25,4 @@ if exist "HMU_JOBS\error_report.json" echo [HMU BAO LOI] Kiem tra chi tiet loi t
 pause
 exit /b 1
 :end
-pause
 exit /b 0
