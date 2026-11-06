@@ -407,10 +407,11 @@ class AppTests(unittest.TestCase):
   err_root = self.root / 'startup_err_root'
   err_root.mkdir(parents=True, exist_ok=True)
   with patch('sys.argv', ['app.py', '--root', str(err_root), '--port', str(self.server.server_port)]):
-   out = io.StringIO()
-   with patch('sys.stdout', out):
-    with self.assertRaises(SystemExit):
-     app.main()
+   with patch('app._is_hmu_server_running', return_value=False):
+    out = io.StringIO()
+    with patch('sys.stdout', out):
+     with self.assertRaises(SystemExit):
+      app.main()
   report_file = err_root / 'error_report.json'
   self.assertTrue(report_file.is_file())
   report = json.loads(report_file.read_text(encoding='utf-8'))
@@ -642,6 +643,195 @@ class AppTests(unittest.TestCase):
    self.assertNotIn(b'\x00', raw, f'{py_path.name} contains null bytes')
    self.assertFalse(raw.startswith(b'\xff'), f'{py_path.name} starts with 0xFF')
    raw.decode('utf-8')
+
+ def test_batch_status_includes_updated_and_error_detail(self):
+  import batch
+  source = self.root / 'fail_case.pdf'
+  source.write_bytes(self.pdf())
+  db = self.root / 'jobs' / 'batch' / 'queue.sqlite3'
+  ident = batch.enqueue(db, [source])[0]
+  batch.claim_next(db)
+  err_detail = {
+   'id': 'err_test_99',
+   'category': 'FILE_ERROR',
+   'stage': 'BATCH_WORKER',
+   'message': 'Tệp PDF bị hỏng cấu trúc',
+   'source_file': 'fail_case.pdf',
+  }
+  batch.set_stage_result(
+   db,
+   ident,
+   expected_state='PREPARING',
+   result={'state': 'FAILED', 'error': 'Tệp PDF bị hỏng cấu trúc', 'error_detail': err_detail},
+  )
+  code, status = self.req('GET', '/batch/status')
+  self.assertEqual(code, 200, status)
+  self.assertEqual(len(status['jobs']), 1)
+  item = status['jobs'][0]
+  self.assertEqual(item['id'], ident)
+  self.assertEqual(item['state'], 'FAILED')
+  self.assertIn('updated', item)
+  self.assertIsInstance(item['updated'], (int, float))
+  self.assertEqual(item.get('error_detail'), err_detail)
+
+ def test_create_server_recovers_stuck_batch_queue_when_unlocked(self):
+  import batch
+  custom_root = self.root / 'recover_jobs'
+  db = custom_root / 'batch' / 'queue.sqlite3'
+  s1 = self.root / 'stuck1.pdf'
+  s2 = self.root / 'stuck2.pdf'
+  s1.write_bytes(self.pdf())
+  s2.write_bytes(self.pdf())
+  ids = batch.enqueue(db, [s1, s2])
+  batch.claim_next(db)  # ids[0] -> PREPARING
+  batch.claim_next(db)  # ids[1] -> PREPARING
+  batch.cancel_job(db, ids[1])  # ids[1] -> CANCELLING
+
+  # 1. If coordinator holds queue_lock, create_server must not block or fail, and leaves states untouched
+  with batch.queue_lock(db):
+   srv_locked = app.create_server(custom_root, None, 0)
+   srv_locked.server_close()
+  self.assertEqual(batch.get_job(db, ids[0])['state'], 'PREPARING')
+  self.assertEqual(batch.get_job(db, ids[1])['state'], 'CANCELLING')
+
+  # 2. When no coordinator holds queue_lock, create_server automatically recovers stuck jobs
+  srv_unlocked = app.create_server(custom_root, None, 0)
+  srv_unlocked.server_close()
+  self.assertEqual(batch.get_job(db, ids[0])['state'], 'QUEUED')
+  self.assertEqual(batch.get_job(db, ids[1])['state'], 'CANCELLED')
+
+ def test_state_returns_active_task_when_running(self):
+  import time
+  from unittest.mock import patch
+  d = self.upload()
+  # When idle, active_task is None (or not running)
+  _, idle_state = self.req('GET', '/state')
+  self.assertIsNone(idle_state.get('active_task'))
+
+  started = threading.Event()
+  release = threading.Event()
+  original = app.export_reviewed_folder
+  def slow(*args, **kwargs):
+   kwargs['progress_cb']('Đang xuất 1/1')
+   started.set()
+   release.wait(5)
+   return original(*args, **kwargs)
+  with patch.object(app, 'export_reviewed_folder', side_effect=slow):
+   code, result = self.req('POST', '/export_folder', {**self.ident(d), 'destination': str(self.root / 'out_state_task')}, {'X-HMU-Async': '1'})
+   self.assertEqual(code, 202, result)
+   self.assertTrue(started.wait(2))
+   try:
+    code, running_state = self.req('GET', '/state')
+    self.assertEqual(code, 200, running_state)
+    self.assertIsNotNone(running_state.get('active_task'))
+    self.assertEqual(running_state['active_task']['status'], 'running')
+    self.assertEqual(running_state['active_task']['task_id'], result['task_id'])
+    self.assertEqual(running_state['active_task']['progress'], 'Đang xuất 1/1')
+   finally:
+    release.set()
+   for _ in range(100):
+    prog = self.req('GET', '/progress?task_id=' + result['task_id'])[1]
+    if prog['status'] != 'running':
+     break
+    time.sleep(0.02)
+   _, done_state = self.req('GET', '/state')
+   self.assertIsNone(done_state.get('active_task'))
+
+ def test_configure_windows_console_disables_quick_edit_and_sets_title(self):
+  from unittest.mock import patch, MagicMock
+  fake_kernel32 = MagicMock()
+  fake_kernel32.GetStdHandle.return_value = 42
+  def fake_get_mode(handle, mode_ptr):
+   mode_ptr._obj.value = 0x0040 | 0x0080 | 0x0001
+   return 1
+  fake_kernel32.GetConsoleMode.side_effect = fake_get_mode
+  fake_kernel32.SetConsoleMode.return_value = 1
+  with patch('app.os.name', 'nt'), patch('ctypes.windll', create=True) as mock_windll:
+   mock_windll.kernel32 = fake_kernel32
+   app._configure_windows_console()
+  fake_kernel32.GetStdHandle.assert_called_once_with(-10)
+  fake_kernel32.SetConsoleMode.assert_called_once()
+  handle_arg, new_mode_arg = fake_kernel32.SetConsoleMode.call_args[0]
+  self.assertEqual(handle_arg, 42)
+  self.assertEqual(new_mode_arg & 0x0040, 0)
+  self.assertEqual(new_mode_arg & 0x0080, 0x0080)
+  fake_kernel32.SetConsoleTitleW.assert_called_once()
+
+ def test_is_hmu_server_running_detects_live_instance(self):
+  self.assertTrue(app._is_hmu_server_running(self.server.server_port))
+  self.assertFalse(app._is_hmu_server_running(9))
+
+ def test_main_reopens_browser_and_exits_zero_when_hmu_server_already_running(self):
+  import io
+  from unittest.mock import patch
+  reuse_root = self.root / 'reuse_session_root'
+  reuse_root.mkdir(parents=True, exist_ok=True)
+  with patch('sys.argv', ['app.py', '--root', str(reuse_root), '--port', str(self.server.server_port)]):
+   with patch('webbrowser.open') as mock_open:
+    out = io.StringIO()
+    with patch('sys.stdout', out):
+     with self.assertRaises(SystemExit) as cm:
+      app.main()
+     self.assertEqual(cm.exception.code, 0)
+    mock_open.assert_called_once_with(f'http://127.0.0.1:{self.server.server_port}')
+  self.assertFalse((reuse_root / 'error_report.json').exists())
+  self.assertIn(f'http://127.0.0.1:{self.server.server_port}', out.getvalue())
+
+ def test_main_startup_error_records_report_when_port_occupied_by_non_hmu(self):
+  import io
+  from unittest.mock import patch
+  err_root = self.root / 'non_hmu_err_root'
+  err_root.mkdir(parents=True, exist_ok=True)
+  with patch('sys.argv', ['app.py', '--root', str(err_root), '--port', str(self.server.server_port)]):
+   with patch('app._is_hmu_server_running', return_value=False):
+    out = io.StringIO()
+    with patch('sys.stdout', out):
+     with self.assertRaises(SystemExit) as cm:
+      app.main()
+     self.assertNotEqual(cm.exception.code, 0)
+  self.assertTrue((err_root / 'error_report.json').is_file())
+
+ def test_main_prints_do_not_close_warning_banner_on_startup(self):
+  import io
+  from unittest.mock import patch
+  banner_root = self.root / 'banner_root'
+  banner_root.mkdir(parents=True, exist_ok=True)
+  with patch('sys.argv', ['app.py', '--root', str(banner_root), '--port', '8771', '--no-browser']):
+   with patch('app.create_server') as mock_create:
+    mock_server = mock_create.return_value
+    mock_server.server_port = 8771
+    mock_server.serve_forever.side_effect = KeyboardInterrupt
+    out = io.StringIO()
+    with patch('sys.stdout', out):
+     app.main()
+    self.assertIn('LƯU Ý: KHÔNG ĐÓNG CỬA SỔ ĐEN NÀY KHI ĐANG DUYỆT BỆNH ÁN (Hãy thu nhỏ xuống thanh Taskbar)', out.getvalue())
+
+ def test_static_assets_do_not_block_on_server_lock(self):
+  from unittest.mock import patch
+  entered = threading.Event()
+  release = threading.Event()
+  orig_get_ws = app.get_workspace_config
+  def slow_ws(*args, **kwargs):
+   entered.set()
+   release.wait(2.0)
+   return orig_get_ws(*args, **kwargs)
+  with patch.object(app, 'get_workspace_config', side_effect=slow_ws):
+   holder = threading.Thread(target=lambda: self.req('GET', '/workspace/state'), daemon=True)
+   holder.start()
+   self.assertTrue(entered.wait(1.0))
+   try:
+    for asset_path in ('/', '/ui/review.js', '/ui/review.css'):
+     c = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=0.3)
+     try:
+      c.request('GET', asset_path, headers={'Host': f'127.0.0.1:{self.server.server_port}'})
+      r = c.getresponse()
+      r.read()
+      self.assertEqual(r.status, 200, asset_path)
+     finally:
+      c.close()
+   finally:
+    release.set()
+    holder.join(timeout=2.0)
 
 
 if __name__=='__main__':unittest.main()
