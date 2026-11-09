@@ -8,6 +8,7 @@ from delivery import (
 )
 from error_pipeline import record_error_event, get_error_report
 import fitz
+import updater
 from engine import (
     prepare, export, save_json, validate_review, approve_all_pages,
     generate_audit_markdown, prepare_case, export_case, extract_case_seeds, _strip_accents
@@ -187,7 +188,7 @@ class Conflict(ValueError):
     pass
 
 
-def create_server(root: Path, active: Path | None = None, port: int = 0):
+def create_server(root: Path, active: Path | None = None, port: int = 0, repo_dir: Path | None = None):
     """Create a loopback-only server. The caller owns serve/shutdown lifecycle."""
     import copy, math, batch, time
     from contextlib import ExitStack
@@ -257,8 +258,11 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
             items.append(item)
         status_path=batch_db.parent/'coordinator_status.json'
         status=json.loads(status_path.read_text(encoding='utf8')) if status_path.exists() else {}
-        from batch_runtime import process_alive
-        status['running']=bool(status.get('pid') and time.time()-status.get('heartbeat',0)<30 and process_alive(status['pid']))
+        try:
+            from batch_runtime import process_alive
+            status['running']=bool(status.get('pid') and time.time()-status.get('heartbeat',0)<30 and process_alive(status['pid']))
+        except Exception:
+            status['running']=bool(status.get('running', False))
         return dict(jobs=items,coordinator=status)
 
     def batch_post(path,req):
@@ -539,6 +543,11 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                             with fitz.open(pdf) as doc:
                                 if not 1<=pn<=len(doc):raise ValueError('Invalid page')
                                 self.send(200,doc[pn-1].get_pixmap(dpi=120,alpha=False).tobytes('png'),'image/png');return
+                    if path == '/update/status':
+                        repo = getattr(self.server, 'repo_dir', Path(__file__).resolve().parent)
+                        current_info = updater.get_current_version_info(repo, state_dir=root)
+                        versions_info = updater.list_versions(repo, state_dir=root)
+                        self.send(200, {'current': current_info, 'versions': versions_info}); return
                     if not active: self.send(404, {'error':'No active job'}); return
                     d = read_review(active)
                     if q.get('job_id', [''])[0] != d['job_id']: raise Conflict('Job changed; reload state')
@@ -634,6 +643,54 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                     if path.startswith('/batch/'):
                         if path=='/batch/open_job' and progress['status']=='running':raise Conflict('Đợi thao tác hiện tại hoàn tất trước khi chuyển file')
                         self.send(200,batch_post(path,json.loads(body)));return
+                    if path == '/update/check':
+                        req = json.loads(body) if body else {}
+                        repo = getattr(self.server, 'repo_dir', Path(__file__).resolve().parent)
+                        remote = req.get('remote', 'origin')
+                        branch = req.get('branch')
+                        fetch = bool(req.get('fetch', True))
+                        check_res = updater.check_for_updates(repo, remote=remote, branch=branch, state_dir=root, fetch=fetch)
+                        versions_res = updater.list_versions(repo, remote=remote, branch=branch, state_dir=root)
+                        self.send(200, {'check': check_res, 'versions': versions_res}); return
+                    if path in {'/update/apply', '/update/rollback'}:
+                        coord = batch_status().get('coordinator', {})
+                        if progress['status'] == 'running' or coord.get('active', 0) > 0:
+                            raise Conflict('Đang xử lý tài liệu hoặc hàng đợi. Vui lòng đợi hoàn tất hoặc tạm dừng trước khi đổi phiên bản.')
+                        save_session()
+                        req = json.loads(body) if body else {}
+                        repo = getattr(self.server, 'repo_dir', Path(__file__).resolve().parent)
+                        restart = bool(req.get('restart', True))
+                        run_pip = bool(req.get('run_pip', True))
+                        run_smoke_test = bool(req.get('run_smoke_test', True))
+                        remote = req.get('remote', 'origin')
+                        branch = req.get('branch')
+                        smoke_modules = req.get('smoke_modules', ('app',))
+                        if path == '/update/apply':
+                            target = req.get('target', 'latest')
+                            res = updater.switch_version(
+                                repo,
+                                target=target,
+                                remote=remote,
+                                branch=branch,
+                                state_dir=root,
+                                run_pip=run_pip,
+                                run_smoke_test=run_smoke_test,
+                                smoke_modules=tuple(smoke_modules) if smoke_modules else None,
+                            )
+                        else:
+                            res = updater.rollback_previous(
+                                repo,
+                                remote=remote,
+                                branch=branch,
+                                state_dir=root,
+                                run_pip=run_pip,
+                                run_smoke_test=run_smoke_test,
+                                smoke_modules=tuple(smoke_modules) if smoke_modules else None,
+                            )
+                        if restart:
+                            self.server.restart_requested = True
+                            threading.Timer(0.25, self.server.shutdown).start()
+                        self.send(200, {'result': res, 'restarting': restart}); return
                     if progress['status']=='running': raise Conflict('Đang xử lý tác vụ. Hãy đợi hoàn tất.')
                     if path in {'/upload','/open_path','/export','/export_folder'} and batch_status()['coordinator'].get('active',0):
                         raise Conflict('Máy đang chạy hàng đợi. Thêm file vào hàng đợi hoặc tạm dừng và đợi file đang chạy xong; vẫn có thể duyệt file khác.')
@@ -853,6 +910,8 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
     server=LocalServer(('127.0.0.1',port),Handler)
     server.daemon_threads=True
     server.save_session=save_session
+    server.repo_dir=Path(repo_dir).resolve() if repo_dir else Path(__file__).resolve().parent
+    server.restart_requested=False
     return server
 
 
@@ -952,5 +1011,7 @@ def main():
             report_file=root_path/'error_report.json'
             print(f"\n[HMU BÁO LỖI] Phiên làm việc ghi nhận {report['total_errors']} lỗi.")
             print(f"[HMU BÁO LỖI] Báo cáo chi tiết: {report_file.resolve()}\n")
+    if getattr(server, 'restart_requested', False) is True:
+        raise SystemExit(42)
 
 if __name__=='__main__':main()
