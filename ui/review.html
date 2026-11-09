@@ -3,7 +3,11 @@
 <!-- REVIEW_CSS -->
 <header class="masthead">
  <div><span class="brand">HMU</span><h1>Khử định danh PDF</h1></div>
- <span class="local-badge">Chạy trên máy</span>
+ <div class="masthead-actions">
+  <span id="versionBadge" class="local-badge">Phiên bản: ...</span>
+  <button type="button" id="openUpdateModal" class="update-btn">🔄 Phiên bản &amp; Cập nhật <span id="updateDot" class="update-dot hide"></span></button>
+  <span class="local-badge">Chạy trên máy</span>
+ </div>
 </header>
 <section id="workspacePanel" class="panel workspace-panel" aria-labelledby="workspaceHeading">
  <h2 id="workspaceHeading">Windows 11 Desktop Workspace</h2>
@@ -86,6 +90,31 @@
    <button type="button" id="saveOfflineSession" class="primary">Lưu phiên làm việc</button>
    <button type="button" id="dismissOfflineModal">Bỏ qua</button>
   </div>
+ </div>
+</div>
+<div id="updateModal" class="update-overlay hide" role="dialog" aria-modal="true" aria-labelledby="updateHeading">
+ <div class="update-dialog panel">
+  <div class="update-modal-header">
+   <h2 id="updateHeading">🔄 Quản lý Phiên bản &amp; Cập nhật Git</h2>
+   <button type="button" id="closeUpdateModal" class="close-btn" aria-label="Đóng">&times;</button>
+  </div>
+  <div id="updateCurrentInfo" class="update-info-block"></div>
+  <div id="updateComparisonStatus" class="update-status-block"></div>
+  <div class="update-quick-actions form-row">
+   <button type="button" id="btnCheckUpdate">Kiểm tra trên Git</button>
+   <button type="button" id="btnUpdateLatest" class="primary">Cập nhật bản mới nhất</button>
+   <button type="button" id="btnRollbackPrev">Quay lại bản trước đó</button>
+  </div>
+  <div class="update-version-select-block">
+   <label for="versionSelect"><b>Chọn phiên bản cụ thể (Tag hoặc Commit):</b></label>
+   <div class="form-row">
+    <select id="versionSelect" class="grow">
+     <option value="">-- Bấm &quot;Kiểm tra trên Git&quot; để nạp danh sách --</option>
+    </select>
+    <button type="button" id="btnSwitchSelectedVersion" class="primary">Chuyển sang phiên bản đã chọn</button>
+   </div>
+  </div>
+  <div id="updateRestartNotice" class="update-restart-notice hide"></div>
  </div>
 </div>
 <div id="workflow" class="hide"><nav><button id="newCase">Mở ca bệnh khác</button><button id="prevFile" class="hide">← File trước</button><select id="caseFile" aria-label="PDF trong ca bệnh" class="hide"></select><span id="filePos" class="hide"></span><button id="nextFile" class="hide">File sau →</button><label id="caseScope" class="hide"><input id="wholeCase" type="checkbox"> Xuất cả ca</label><button id="prev">← Trang trước</button><input id="pageNo" type="number" min="1" style="width:65px"><span id="pageTotal"></span><button id="next">Trang sau →</button><button id="mode">Khoanh thêm vùng xóa</button><button class="primary" id="done">Đã duyệt trang này</button><button class="success" id="approveAll">Duyệt tất cả trang</button><button id="viewAudit">Báo cáo Markdown</button><button id="save">Lưu</button><button id="draft">Xuất PDF thử</button><button class="primary" id="export">Xuất PDF chính thức</button><a id="download" class="hide" href="/download" download>Tải PDF</a></nav>
