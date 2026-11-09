@@ -75,8 +75,51 @@ aside { padding: 12px; background: white; border-radius: 10px; min-width: 0; }
   from { opacity: 0; transform: translateX(110%); }
   to { opacity: 1; transform: translateX(0); }
 }
+.kbd-hint {
+  display: inline-block; margin-left: 5px; padding: 1px 5px; border-radius: 4px;
+  font: 700 11px/1.35 ui-monospace, SFMono-Regular, Consolas, monospace;
+  background: #e8eff5; color: #19334d; border: 1px solid #b5c6d6;
+  box-shadow: 0 1px 0 rgba(21, 38, 57, .18); vertical-align: middle;
+}
+button.primary .kbd-hint, button.success .kbd-hint, .workspace-switch button[aria-pressed="true"] .kbd-hint {
+  background: rgba(255, 255, 255, .2); color: #fff; border-color: rgba(255, 255, 255, .45);
+}
+button:disabled .kbd-hint { opacity: .45; }
+button.kbd-active, .ergo-key.kbd-active {
+  transform: translateY(1px) scale(.98);
+  outline: 3px solid #075e65 !important;
+  box-shadow: 0 0 0 3px rgba(7, 94, 101, .25);
+}
+.shortcut-toggle { margin-left: auto; background: #f8fafc; font-weight: 600; }
+.shortcut-pad { padding: 10px 14px; background: #f8fbfd; border-style: dashed; }
+.shortcut-pad-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-size: 13px; }
+.ctx-badge { background: #19334d; color: #fff; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+.ergo-grid {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-top: 8px;
+}
+.ergo-key {
+  display: flex; align-items: center; gap: 7px; padding: 6px 8px; border-radius: 7px;
+  background: white; border: 1px solid var(--line); font-size: 12.5px; text-align: left; min-height: 36px;
+}
+.ergo-key.home-row { border-color: #075e65; background: #eef8f8; font-weight: 600; }
+.ergo-key.space-bar { grid-column: 1 / -1; justify-content: center; background: #075e65; color: white; border-color: #05494f; font-weight: 650; }
+.ergo-key.space-bar .kbd-hint { background: rgba(255, 255, 255, .22); color: #fff; border-color: rgba(255, 255, 255, .5); }
+.ergo-key.inactive { opacity: .45; cursor: default; }
+.offline-overlay {
+  position: fixed; inset: 0; z-index: 120;
+  background: rgba(21, 38, 57, .62);
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px;
+}
+.offline-dialog {
+  max-width: 520px; width: 100%; margin: 0;
+  box-shadow: 0 16px 36px rgba(21, 38, 57, .28);
+}
+.offline-dialog h2 { margin-bottom: 6px; }
+.offline-actions { margin-top: 14px; display: flex; gap: 10px; justify-content: flex-end; }
 @media (max-width: 850px) {
   main { grid-template-columns: minmax(0, 1fr); }
   nav { position: static; }
   button { min-height: 44px; }
+  .ergo-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

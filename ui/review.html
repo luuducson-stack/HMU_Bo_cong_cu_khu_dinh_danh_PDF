@@ -23,7 +23,16 @@
 <div class="workspace-switch" role="group" aria-label="Chế độ làm việc">
  <button id="localMode" aria-pressed="true">Ca đang mở</button>
  <button id="batchMode" aria-pressed="false">Hàng đợi</button>
+ <button type="button" id="toggleShortcutPad" class="shortcut-toggle" aria-expanded="true" title="Ẩn/hiện sơ đồ bàn phím tay trái (Phím `)">⌨ Bàn phím tay trái</button>
 </div>
+<section id="shortcutPad" class="panel shortcut-pad" aria-label="Sơ đồ phím tắt tay trái 3x4">
+ <div class="shortcut-pad-head">
+  <strong>🖐 Cụm phím Tay trái cố định (Không cần di chuyển cổ tay)</strong>
+  <span id="shortcutContextBadge" class="ctx-badge">Chế độ: Mở ca</span>
+  <span class="muted small">Tay phải giữ chuột · Tay trái đặt trên <b>A - S - D - F</b> &amp; <b>Space</b> · Bấm <kbd class="kbd-hint">`</kbd> để ẩn/hiện · <kbd class="kbd-hint">Esc</kbd> thoát ô nhập</span>
+ </div>
+ <div id="shortcutGrid" class="ergo-grid" role="group" aria-label="Lưới phím 3x4 tay trái"></div>
+</section>
 <section id="batchPanel" class="panel hide" aria-labelledby="batchHeading">
 <h2 id="batchHeading">Hàng đợi</h2>
 <p class="muted">Mỗi PDF là một hồ sơ độc lập. Mở từng bản đã xử lý để duyệt và kiểm QC.</p>
@@ -69,6 +78,16 @@
 <p>Nếu còn thông tin cần khử: khoanh/chọn thêm vùng trên ảnh nguồn → Xuất PDF thử để xếp hàng xuất và kiểm lại. Chỉ xác nhận giữ khi đã kiểm cảnh báo; nút Xuất PDF chính thức yêu cầu duyệt đủ trang và xử lý mọi cảnh báo.</p>
 </section>
 <div id="auditModal" class="hide"></div>
+<div id="offlineModal" class="offline-overlay hide" role="dialog" aria-modal="true" aria-labelledby="offlineHeading">
+ <div class="offline-dialog panel">
+  <h2 id="offlineHeading">⚠️ Mất kết nối máy chủ</h2>
+  <p id="offlineMessage" class="muted">Không thể kết nối đến máy chủ cục bộ (Terminal có thể đã tắt hoặc bị gián đoạn). Thao tác giao diện đang tạm khóa.</p>
+  <div class="offline-actions form-row">
+   <button type="button" id="saveOfflineSession" class="primary">Lưu phiên làm việc</button>
+   <button type="button" id="dismissOfflineModal">Bỏ qua</button>
+  </div>
+ </div>
+</div>
 <div id="workflow" class="hide"><nav><button id="newCase">Mở ca bệnh khác</button><button id="prevFile" class="hide">← File trước</button><select id="caseFile" aria-label="PDF trong ca bệnh" class="hide"></select><span id="filePos" class="hide"></span><button id="nextFile" class="hide">File sau →</button><label id="caseScope" class="hide"><input id="wholeCase" type="checkbox"> Xuất cả ca</label><button id="prev">← Trang trước</button><input id="pageNo" type="number" min="1" style="width:65px"><span id="pageTotal"></span><button id="next">Trang sau →</button><button id="mode">Khoanh thêm vùng xóa</button><button class="primary" id="done">Đã duyệt trang này</button><button class="success" id="approveAll">Duyệt tất cả trang</button><button id="viewAudit">Báo cáo Markdown</button><button id="save">Lưu</button><button id="draft">Xuất PDF thử</button><button class="primary" id="export">Xuất PDF chính thức</button><a id="download" class="hide" href="/download" download>Tải PDF</a></nav>
 <main><div id="view"><canvas id="canvas"></canvas></div><aside><div id="help">Vùng <b style="color:#c33">đỏ</b> sẽ bị xóa (đã tự động chọn Tên BN, SĐT, Địa chỉ, Ngày/Năm sinh, Tên & Chữ ký nhân viên, Watermark). Giữ nguyên dữ liệu Tuổi. Vùng định danh đã xác nhận được tự tích đỏ sau khi quét. Đề xuất thiếu ngữ cảnh đang để chưa chọn; cần kiểm tra và chọn bổ sung. Vùng <b style="color:#ba7800">cam</b> được giữ lại (Logo, Ảnh chuyên môn, Mã vạch hậu kiểm).<p>Nhấp vùng hoặc ô chọn để giữ/xóa. Khoanh thêm vùng bằng cách kéo chuột. Có thể bấm <b>“✓ Duyệt tất cả trang”</b> rồi bấm <b>“Xuất PDF chính thức”</b>.</p></div><div id="items"></div><p>Ghi chú trang <input id="note" style="width:90%"></p></aside></main></div>
 <!-- REVIEW_JS -->

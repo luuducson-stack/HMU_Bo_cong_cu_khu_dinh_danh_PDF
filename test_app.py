@@ -878,5 +878,335 @@ class AppTests(unittest.TestCase):
   self.assertEqual(batch.get_job(db, ids[0])['state'], 'QUEUED')
   self.assertEqual(batch.get_job(db, ids[1])['state'], 'QUEUED')
 
+ def test_single_folder_session_saves_picked_folder_and_active_page_across_restart(self):
+  from unittest.mock import patch
+  case_dir = self.root / 'ca_benh_don_01'
+  case_dir.mkdir(exist_ok=True)
+  for idx in range(1, 3):
+   doc = fitz.open()
+   for pno in range(1, 4):
+    page = doc.new_page(width=300, height=200)
+    page.insert_text((36, 72), f'Benh nhan Nguyen Van A - File {idx} Trang {pno}')
+   doc.save(case_dir / f'benh_an_{idx}.pdf')
+   doc.close()
+  dest_dir = self.root / 'ket_qua_xuat'
+  with patch.object(app, '_pick_folder_dialog', return_value=str(case_dir)):
+   code, picked = self.req('POST', '/pick_folder', {'initial_dir': str(self.root), 'target': 'localPath'})
+   self.assertEqual(code, 200, picked)
+  code, saved_sess = self.req('POST', '/session/save', {
+   'selected_path': str(case_dir),
+   'destination': str(dest_dir),
+   'study_id': 'HMU_SINGLE_01',
+   'whole_case': True,
+   'active_page': 1,
+  })
+  self.assertEqual(code, 200, saved_sess)
+  # Restart server BEFORE opening path -> selected_path & destination must still be restored
+  restarted1 = app.create_server(self.root / 'jobs', None, 0)
+  t1 = threading.Thread(target=restarted1.serve_forever, daemon=True); t1.start()
+  try:
+   c = http.client.HTTPConnection('127.0.0.1', restarted1.server_port, timeout=30)
+   c.request('GET', '/state'); r = c.getresponse(); st1 = json.loads(r.read()); c.close()
+   self.assertEqual(st1['session']['selected_path'], str(case_dir))
+   self.assertEqual(st1['session']['destination'], str(dest_dir))
+   self.assertEqual(st1['session']['study_id'], 'HMU_SINGLE_01')
+   self.assertTrue(st1['session']['whole_case'])
+  finally:
+   restarted1.shutdown(); restarted1.server_close(); t1.join()
+  # Open folder, switch to file 2, page 3, save page 3, then restart server
+  code, opened = self.req('POST', '/open_path', {'path': str(case_dir), 'study_id': 'HMU_SINGLE_01', 'destination': str(dest_dir)})
+  self.assertEqual(code, 200, opened)
+  code, st_f2 = self.req('POST', '/select_file', {**self.ident(opened['review']), 'file_index': 2})
+  self.assertEqual(code, 200, st_f2)
+  d2 = st_f2['review']
+  p3 = d2['pages'][2]
+  code, saved_p3 = self.req('POST', '/save_page', {
+   **self.ident(d2), 'page': 3, 'reviewed': True, 'manual_rects': [[10, 10, 80, 40]],
+   'note': ' Đã duyệt trang 3 file 2',
+   'selections': [{'id': q['id'], 'selected': q['selected']} for q in p3['proposals']]
+  })
+  self.assertEqual(code, 200, saved_p3)
+  restarted2 = app.create_server(self.root / 'jobs', None, 0)
+  t2 = threading.Thread(target=restarted2.serve_forever, daemon=True); t2.start()
+  try:
+   c = http.client.HTTPConnection('127.0.0.1', restarted2.server_port, timeout=30)
+   c.request('GET', '/state'); r = c.getresponse(); st2 = json.loads(r.read()); c.close()
+   self.assertEqual(st2['review']['job_id'], d2['job_id'])
+   self.assertEqual(st2['session']['active_file_index'], 2)
+   self.assertEqual(st2['session']['active_page'], 3)
+   self.assertEqual(st2['session']['selected_path'], str(case_dir.resolve()))
+  finally:
+   restarted2.shutdown(); restarted2.server_close(); t2.join()
+
+ def test_interrupted_folder_prepare_checkpoints_completed_files_and_resumes_without_reprocessing(self):
+  from unittest.mock import patch
+  import engine
+  case_dir = self.root / 'ca_benh_3_files'
+  case_dir.mkdir(exist_ok=True)
+  for idx in range(1, 4):
+   (case_dir / f'ho_so_{idx:02d}.pdf').write_bytes(self.pdf())
+  prepared_calls = []
+  orig_prepare = engine.prepare
+  def flaky_prepare(pdf_file, sub_job, *args, **kwargs):
+   prepared_calls.append(Path(pdf_file).name)
+   if len(prepared_calls) == 3:
+    raise RuntimeError('Terminal closed during file 3')
+   return orig_prepare(pdf_file, sub_job, *args, **kwargs)
+  with patch('engine.prepare', side_effect=flaky_prepare):
+   code, err_res = self.req('POST', '/open_path', {'path': str(case_dir), 'study_id': 'RESUME_CASE'})
+   self.assertEqual(code, 400, err_res)
+  # 2 files were prepared before crash; checkpoint manifest & last_session must exist
+  self.assertEqual(prepared_calls, ['ho_so_01.pdf', 'ho_so_02.pdf', 'ho_so_03.pdf'])
+  manifests = list((self.root / 'jobs').glob('*/case/case_manifest.json'))
+  self.assertEqual(len(manifests), 1)
+  partial_manifest = json.loads(manifests[0].read_text(encoding='utf-8'))
+  self.assertFalse(partial_manifest.get('complete', True))
+  self.assertEqual(len(partial_manifest['files']), 2)
+  # Now user restarts tool and opens the same folder again -> only file 3 should be prepared!
+  resumed_calls = []
+  def tracking_prepare(pdf_file, sub_job, *args, **kwargs):
+   resumed_calls.append(Path(pdf_file).name)
+   return orig_prepare(pdf_file, sub_job, *args, **kwargs)
+  with patch('engine.prepare', side_effect=tracking_prepare):
+   code, ok_res = self.req('POST', '/open_path', {'path': str(case_dir), 'study_id': 'RESUME_CASE'})
+   self.assertEqual(code, 200, ok_res)
+  self.assertEqual(resumed_calls, ['ho_so_03.pdf'])
+  self.assertEqual(len(ok_res['files']), 3)
+
+ def test_e2e_single_folder_session_lifecycle_with_real_logs(self):
+  """
+  Kiểm thử tích hợp End-to-End toàn bộ vòng đời phiên làm việc Folder đơn với log thực tế:
+  - Chặng 1: Sinh dữ liệu động thực tế (PDF nhiều trang với token ngẫu nhiên, không hardcode).
+  - Chặng 2: Mở folder và ngắt quãng giữa chừng khi đang quét (mô phỏng crash / tắt terminal),
+             kiểm chứng checkpoint manifest lưu lũy tiến (complete=False).
+  - Chặng 3: Khởi động quét tiếp (resume), kiểm chứng tái sử dụng các file đã OCR trước đó
+             và chỉ xử lý file còn lại (complete=True).
+  - Chặng 4: Duyệt từng file, từng trang, cập nhật note/rects và session metadata -> tắt terminal ->
+             lưu snapshot -> bật lại server và tự động đồng bộ khôi phục chính xác 100%.
+  """
+  import secrets, time, hashlib, sys
+  from unittest.mock import patch
+  import engine
+
+  def log(msg):
+   sys.stderr.write(f"\n[REAL-TEST-LOG] {msg}\n")
+   sys.stderr.flush()
+
+  # --- CHẶNG 1: KHỞI TẠO DỮ LIỆU ĐỘNG THỰC TẾ ---
+  run_token = secrets.token_hex(4)
+  case_name = f"ca_benh_dong_{run_token}"
+  case_dir = self.root / case_name
+  case_dir.mkdir(parents=True, exist_ok=True)
+  dest_dir = self.root / f"xuat_benh_an_{run_token}"
+  study_id = f"HMU_E2E_{secrets.token_hex(3).upper()}"
+
+  file_names = [
+   f"01_benh_an_{secrets.token_hex(2)}.pdf",
+   f"02_xet_nghiem_{secrets.token_hex(2)}.pdf",
+   f"03_chuan_doan_{secrets.token_hex(2)}.pdf"
+  ]
+  file_paths = []
+  file_hashes = {}
+  for idx, fn in enumerate(file_names, 1):
+   doc = fitz.open()
+   for p_idx in range(2):
+    page = doc.new_page(width=595, height=842)
+    page.insert_text((40, 60), f"BỆNH VIỆN ĐẠI HỌC Y HÀ NỘI - HỒ SƠ #{idx}")
+    page.insert_text((40, 100), f"Bệnh nhân: Bệnh nhân {idx} - Mã: {secrets.token_hex(3)}")
+    page.insert_text((40, 140), f"Trang {p_idx + 1}/2 - Thời gian tạo: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+   pdf_bytes = doc.tobytes()
+   doc.close()
+   fp = case_dir / fn
+   fp.write_bytes(pdf_bytes)
+   file_paths.append(fp)
+   file_hashes[fn] = hashlib.sha256(pdf_bytes).hexdigest()
+
+  log(f"[CHẶNG 1: CHỌN FOLDER DỮ LIỆU ĐỘNG]")
+  log(f"  - Thư mục ca bệnh: {case_dir}")
+  log(f"  - Thư mục đích dự kiến: {dest_dir}")
+  log(f"  - Mã đề tài nghiên cứu: {study_id}")
+  log(f"  - 3 tệp PDF tạo động thành công:")
+  for fn in file_names:
+   log(f"    * {fn} | SHA256: {file_hashes[fn][:16]}... | Kích thước: {len((case_dir / fn).read_bytes())} bytes")
+
+  # --- CHẶNG 2: NGẮT QUÃNG KHI ĐANG QUÉT ---
+  log(f"[CHẶNG 2: NGẮT QUÃNG GIỮA CHỪNG KHI ĐANG QUÉT]")
+  prepared_order = []
+  orig_prepare = engine.prepare
+  def interrupted_prepare(pdf_file, sub_job, *args, **kwargs):
+   pname = Path(pdf_file).name
+   prepared_order.append(pname)
+   if len(prepared_order) == 3:
+    log(f"  - [MÔ PHỎNG] Gặp sự cố đột ngột / tắt terminal khi đang OCR tệp thứ 3: {pname}")
+    raise RuntimeError(f"Terminal crash simulation on {pname}")
+   return orig_prepare(pdf_file, sub_job, *args, **kwargs)
+
+  with patch('engine.prepare', side_effect=interrupted_prepare):
+   code, err_res = self.req('POST', '/open_path', {
+    'path': str(case_dir),
+    'study_id': study_id,
+    'destination': str(dest_dir)
+   })
+   self.assertEqual(code, 400, err_res)
+   log(f"  - Server trả về mã lỗi 400 như kỳ vọng: {err_res}")
+
+  self.assertEqual(len(prepared_order), 3)
+  manifests = list((self.root / 'jobs').glob('*/case/case_manifest.json'))
+  self.assertEqual(len(manifests), 1, "Phải ghi checkpoint case_manifest.json ngay sau các file đầu")
+  checkpoint = json.loads(manifests[0].read_text(encoding='utf-8'))
+  self.assertFalse(checkpoint.get('complete', True), "Trạng thái complete trong checkpoint phải là False")
+  self.assertEqual(len(checkpoint['files']), 2, "Checkpoint phải lưu chính xác 2 file đã hoàn thành")
+  log(f"  - Checkpoint case_manifest.json đã ghi nhận:")
+  log(f"    * Hoàn tất (complete): {checkpoint['complete']}")
+  log(f"    * Số file đã chuẩn bị an toàn: {len(checkpoint['files'])} / {len(file_names)}")
+  log(f"    * Danh sách file đã lưu checkpoint: {[f['source_name'] for f in checkpoint['files']]}")
+
+  # --- CHẶNG 3: KHÔI PHỤC VÀ TIẾP TỤC QUÉT FOLDER ---
+  log(f"[CHẶNG 3: KHÔI PHỤC VÀ TIẾP TỤC QUÉT]")
+  resumed_order = []
+  def tracking_prepare(pdf_file, sub_job, *args, **kwargs):
+   pname = Path(pdf_file).name
+   resumed_order.append(pname)
+   return orig_prepare(pdf_file, sub_job, *args, **kwargs)
+
+  with patch('engine.prepare', side_effect=tracking_prepare):
+   code, ok_res = self.req('POST', '/open_path', {
+    'path': str(case_dir),
+    'study_id': study_id,
+    'destination': str(dest_dir)
+   })
+   self.assertEqual(code, 200, ok_res)
+
+  self.assertEqual(resumed_order, [file_names[2]], "Chỉ duy nhất tệp thứ 3 phải chuẩn bị lại, tệp 1 & 2 được tái sử dụng!")
+  self.assertEqual(len(ok_res['files']), 3)
+  final_checkpoint = json.loads(manifests[0].read_text(encoding='utf-8'))
+  self.assertTrue(final_checkpoint.get('complete'), "Manifest phải được cập nhật complete = True khi kết thúc")
+  log(f"  - Khôi phục mở folder thành công (code 200)")
+  log(f"  - Tệp được chuẩn bị bổ sung: {resumed_order}")
+  log(f"  - 2 tệp đầu được giữ nguyên vẹn từ sub_jobs trước đó, tiết kiệm 100% chi phí OCR lại.")
+  log(f"  - Case manifest hoàn thiện: complete = {final_checkpoint['complete']}, tổng số tệp = {len(final_checkpoint['files'])}")
+
+  # --- CHẶNG 4: DUYỆT TỪNG FILE/TRANG -> TẮT TERMINAL -> LƯU SNAPSHOT -> BẬT LẠI TỰ ĐỒNG BỘ ---
+  log(f"[CHẶNG 4: DUYỆT TỆP/TRANG -> LƯU SNAPSHOT -> KHỞI ĐỘNG LẠI TỰ ĐỒNG BỘ]")
+  # 4.1. Chuyển sang duyệt tệp 2, trang 2
+  code, st_f2 = self.req('POST', '/select_file', {**self.ident(ok_res['review']), 'file_index': 2})
+  self.assertEqual(code, 200, st_f2)
+  d2 = st_f2['review']
+  f2_name = next(f['name'] for f in st_f2.get('files', []) if f['index'] == 2)
+  log(f"  - Đã chọn tệp 2 ({f2_name}), job_id: {d2['job_id']}")
+
+  # Duyệt và lưu trang 2 của tệp 2
+  p2 = d2['pages'][1]
+  offline_note = f"Đã duyệt và khử định danh trang 2 tệp 2 - Token: {run_token}"
+  code, saved_p2 = self.req('POST', '/save_page', {
+   **self.ident(d2),
+   'page': 2,
+   'reviewed': True,
+   'manual_rects': [[15, 25, 120, 60]],
+   'note': offline_note,
+   'selections': [{'id': q['id'], 'selected': q['selected']} for q in p2['proposals']]
+  })
+  self.assertEqual(code, 200, saved_p2)
+  log(f"  - Đã lưu chỉnh sửa trang 2 (revision: {saved_p2['revision']}, reviewed: True, note: '{offline_note}')")
+
+  # Lưu session metadata
+  code, saved_sess = self.req('POST', '/session/save', {
+   'selected_path': str(case_dir),
+   'destination': str(dest_dir),
+   'study_id': study_id,
+   'active_file_index': 2,
+   'active_page': 2,
+   'whole_case': True
+  })
+  self.assertEqual(code, 200, saved_sess)
+  log(f"  - Đã cập nhật metadata phiên: active_file_index=2, active_page=2, destination={dest_dir}")
+
+  # 4.2. Giả lập tắt Terminal: dừng server hiện tại
+  log(f"  - [MÔ PHỎNG] Tắt Terminal (server dừng hoạt động)...")
+  self.server.shutdown()
+  self.server.server_close()
+  self.thread.join()
+
+  # Mô phỏng Web client lưu snapshot vào localStorage trước khi tắt hoặc khi server mất kết nối
+  client_snapshot = {
+   'saved_at': time.time(),
+   'selected_path': str(case_dir.resolve()),
+   'destination': str(dest_dir.resolve()),
+   'study_id': study_id,
+   'active_file_index': 2,
+   'active_page': 2,
+   'page_patch': {
+    'page': 2,
+    'reviewed': True,
+    'manual_rects': [[15, 25, 120, 60], [200, 250, 350, 280]],
+    'note': f"{offline_note} (Đồng bộ bổ sung khi kết nối lại)",
+    'selections': [{'id': q['id'], 'selected': q['selected']} for q in p2['proposals']]
+   }
+  }
+  log(f"  - Client lưu snapshot an toàn vào LocalStorage (hmu_session_backup_v1)")
+
+  # 4.3. Bật lại Server mới (mô phỏng người dùng bật lại công cụ qua MO_CONG_CU.bat)
+  log(f"  - [MÔ PHỎNG] Bật lại Terminal / Server mới...")
+  restarted = app.create_server(self.root / 'jobs', None, 0)
+  t_restarted = threading.Thread(target=restarted.serve_forever, daemon=True)
+  t_restarted.start()
+
+  try:
+   c = http.client.HTTPConnection('127.0.0.1', restarted.server_port, timeout=30)
+   c.request('GET', '/state')
+   r = c.getresponse()
+   st_reboot = json.loads(r.read())
+   new_token = st_reboot['token']
+   log(f"  - Kết nối lại thành công tới Server mới (Token: {new_token[:8]}...)")
+
+   # Kiểm tra Session tự động khôi phục chính xác
+   self.assertEqual(st_reboot['session']['selected_path'], str(case_dir.resolve()))
+   self.assertEqual(st_reboot['session']['destination'], str(dest_dir.resolve()))
+   self.assertEqual(st_reboot['session']['study_id'], study_id)
+   self.assertEqual(st_reboot['session']['active_file_index'], 2)
+   self.assertEqual(st_reboot['session']['active_page'], 2)
+   self.assertEqual(st_reboot['review']['job_id'], d2['job_id'])
+   log(f"  - Trạng thái phiên được Server tự động phục hồi hoàn hảo:")
+   log(f"    * selected_path: {st_reboot['session']['selected_path']}")
+   log(f"    * destination: {st_reboot['session']['destination']}")
+   log(f"    * active_file_index: {st_reboot['session']['active_file_index']}")
+   log(f"    * active_page: {st_reboot['session']['active_page']}")
+   log(f"    * job_id: {st_reboot['review']['job_id']}")
+
+   # Mô phỏng Web client tự động đồng bộ (syncOfflineSnapshotIfNeeded)
+   h_sync = {'X-HMU-Token': new_token}
+   sync_body = json.dumps({
+    'job_id': st_reboot['review']['job_id'],
+    'revision': st_reboot['review']['revision'],
+    **client_snapshot['page_patch']
+   }).encode()
+   c.request('POST', '/save_page', body=sync_body, headers=h_sync)
+   r_sync = c.getresponse()
+   self.assertEqual(r_sync.status, 200)
+   saved_sync = json.loads(r_sync.read())
+   self.assertTrue(saved_sync.get('saved'))
+   log(f"  - Tự động đồng bộ snapshot từ client lên Server thành công (Revision mới: {saved_sync['revision']})")
+
+   # Kiểm chứng lại /state cuối cùng
+   c.request('GET', '/state', headers=h_sync)
+   st_final = json.loads(c.getresponse().read())
+   c.close()
+
+   p2_verified = st_final['review']['pages'][1]
+   self.assertEqual(len(p2_verified['manual_rects']), 2)
+   self.assertIn("Đồng bộ bổ sung", p2_verified['note'])
+   self.assertTrue(p2_verified['reviewed'])
+   log(f"  - Xác nhận trang 2 tệp 2 đã cập nhật đầy đủ dữ liệu đồng bộ (2 manual rects, note chuẩn xác).")
+  finally:
+   restarted.shutdown()
+   restarted.server_close()
+   t_restarted.join()
+
+  # Khôi phục server gốc cho tearDown
+  self.server = app.create_server(self.root / 'jobs', None, 0)
+  self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+  self.thread.start()
+  log(f"[KẾT QUẢ] Hoàn thành kiểm thử tích hợp E2E vòng đời phiên Folder đơn: ĐẠT 100% TIÊU CHÍ.")
+
 
 if __name__=='__main__':unittest.main()

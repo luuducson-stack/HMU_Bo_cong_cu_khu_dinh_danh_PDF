@@ -2036,16 +2036,24 @@ def export(job, draft=False, approve_all=False, output_path=None, progress_cb=No
         if staging.exists():shutil.rmtree(staging)
 
 
-def prepare_case(case_path, job_root, study_id='HMU_CASE_0001', progress_cb=None):
+def prepare_case(case_path, job_root, study_id='HMU_CASE_0001', progress_cb=None, resume=False, on_file_prepared=None):
     """Prepare either a single PDF file or a case directory of 40-90 PDFs (like 1.DHYHN) sharing case seeds."""
     case_path = Path(case_path).resolve()
     job_root = Path(job_root).resolve()
-    if job_root.exists() and any(job_root.iterdir()):
+    if not resume and job_root.exists() and any(job_root.iterdir()):
         raise ValueError('Use a new empty job_root directory')
     job_root.mkdir(parents=True, exist_ok=True)
     pdfs = [case_path] if case_path.is_file() else sorted(case_path.glob('*.pdf'))
     if not pdfs:
         raise ValueError(f'Không tìm thấy file PDF trực tiếp trong thư mục: {case_path}')
+
+    existing_active = None
+    if resume and (job_root / 'case_manifest.json').is_file():
+        try:
+            old_mf = json.loads((job_root / 'case_manifest.json').read_text(encoding='utf-8'))
+            existing_active = old_mf.get('active_sub_job')
+        except Exception:
+            pass
 
     if progress_cb:
         progress_cb(f'Đang trích xuất hạt giống định danh ca bệnh ({case_path.name})...')
@@ -2080,17 +2088,31 @@ def prepare_case(case_path, job_root, study_id='HMU_CASE_0001', progress_cb=None
         f"- **Hạt giống định danh ca bệnh (Case Seeds):** `{json.dumps(shared_seeds, ensure_ascii=False)}`",
         "",
     ]
+    manifest = {}
     for idx, pdf_file in enumerate(pdfs, 1):
         sub_id = study_id
         sub_job = job_root / f"file_{idx:03d}"
-        d = prepare(
-            pdf_file,
-            sub_job,
-            study_id=sub_id,
-            external_seeds=shared_seeds,
-            case_xml_index=case_xml_index,
-            progress_cb=(lambda msg, i=idx, n=len(pdfs): progress_cb(f'[File {i}/{n}] {msg}')) if progress_cb else None,
-        )
+        d = None
+        if resume and (sub_job / 'review.json').is_file() and (sub_job / 'working_private.pdf').is_file():
+            try:
+                cand_d = ensure_job(sub_job)
+                if cand_d.get('source_sha256') == sha(pdf_file):
+                    d = cand_d
+                    if not (sub_job / 'AUDIT_SUMMARY.md').is_file():
+                        generate_audit_markdown(sub_job, d)
+            except Exception:
+                d = None
+        if d is None:
+            if sub_job.exists():
+                shutil.rmtree(sub_job, ignore_errors=True)
+            d = prepare(
+                pdf_file,
+                sub_job,
+                study_id=sub_id,
+                external_seeds=shared_seeds,
+                case_xml_index=case_xml_index,
+                progress_cb=(lambda msg, i=idx, n=len(pdfs): progress_cb(f'[File {i}/{n}] {msg}')) if progress_cb else None,
+            )
         files_info.append({
             'index': idx,
             'source_name': pdf_file.name,
@@ -2101,15 +2123,19 @@ def prepare_case(case_path, job_root, study_id='HMU_CASE_0001', progress_cb=None
         sub_audit = (sub_job / 'AUDIT_SUMMARY.md').read_text(encoding='utf-8')
         combined_md.append(f"---\n## File {idx}/{len(pdfs)}: `{pdf_file.name}`\n")
         combined_md.append(sub_audit)
+        manifest = {
+            'version': VERSION,
+            'study_id': study_id,
+            'source_path': str(case_path),
+            'shared_seeds': shared_seeds,
+            'complete': idx == len(pdfs),
+            'active_sub_job': existing_active or files_info[0]['sub_job'],
+            'files': list(files_info),
+        }
+        save_json(job_root / 'case_manifest.json', manifest)
+        if callable(on_file_prepared):
+            on_file_prepared(job_root, sub_job, idx, len(pdfs))
 
-    manifest = {
-        'version': VERSION,
-        'study_id': study_id,
-        'source_path': str(case_path),
-        'shared_seeds': shared_seeds,
-        'files': files_info,
-    }
-    save_json(job_root / 'case_manifest.json', manifest)
     (job_root / 'AUDIT_SUMMARY.md').write_text('\n'.join(combined_md), encoding='utf-8')
     return manifest
 
