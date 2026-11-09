@@ -1363,6 +1363,241 @@ class AppTests(unittest.TestCase):
    with patch.object(sys, 'argv', ['app.py', '--root', str(test_root), '--no-browser']):
     app.main()
 
+ def test_e2e_git_update_and_rollback_lifecycle_with_real_logs(self):
+  import subprocess, time, os, hashlib
+  def _run_git(cwd, *args):
+   p = subprocess.run(['git', *args], cwd=cwd, capture_output=True, text=True, check=True)
+   return p.stdout.strip()
+
+  def log(msg):
+   print(f"[E2E-UPDATE-LIFECYCLE] {msg}", flush=True)
+
+  log("================================================================================")
+  log("BẮT ĐẦU KIỂM THỬ E2E: VÒNG ĐỜI CẬP NHẬT VÀ ROLLBACK GIT TRÊN MÁY NGƯỜI DÙNG")
+  log("================================================================================")
+
+  # Dọn dẹp server mặc định của setUp để chuyển sang server gắn repo clone thực tế
+  self.server.shutdown()
+  self.server.server_close()
+  self.thread.join()
+
+  # Thiết lập môi trường Git thật: Remote bare repo và Workstation clone
+  remote_dir = self.root / 'remote.git'
+  repo_dir = self.root / 'user_workstation'
+  _run_git(self.root, 'init', '--bare', str(remote_dir))
+  _run_git(self.root, 'clone', str(remote_dir), str(repo_dir))
+  _run_git(repo_dir, 'config', 'user.email', 'bacsi_hmu@hmu.edu.vn')
+  _run_git(repo_dir, 'config', 'user.name', 'BS. Nguyen Van HMU')
+  _run_git(repo_dir, 'checkout', '-b', 'dev')
+
+  # Khởi tạo commit gốc v3.1.0
+  (repo_dir / 'app.py').write_text('VERSION = "3.1.0"\n# HMU App Server\n', encoding='utf-8')
+  (repo_dir / 'requirements.txt').write_text('pymupdf>=1.24.0\n', encoding='utf-8')
+  _run_git(repo_dir, 'add', 'app.py', 'requirements.txt')
+  _run_git(repo_dir, 'commit', '-m', 'feat: v3.1.0 initial release for clinical review')
+  _run_git(repo_dir, 'tag', 'v3.1.0')
+  _run_git(repo_dir, 'push', '-u', 'origin', 'dev', '--tags')
+  v310_sha = _run_git(repo_dir, 'rev-parse', 'HEAD')
+  log(f"[GIAI ĐOẠN 1] Khởi tạo máy trạm người dùng tại phiên bản v3.1.0 (Commit: {v310_sha[:7]})")
+
+  # Khởi tạo thư mục dữ liệu HMU_JOBS nằm ngay bên trong repo của người dùng
+  jobs_dir = repo_dir / 'HMU_JOBS'
+  jobs_dir.mkdir(parents=True, exist_ok=True)
+
+  # Khởi động server gắn với repo clone và thư mục dữ liệu thực tế
+  self.server = app.create_server(jobs_dir, None, 0)
+  self.server.repo_dir = repo_dir
+  self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+  self.thread.start()
+  self.token = self.req('GET', '/state')[1]['token']
+  log(f"  - Server HMU đã khởi động tại cổng {self.server.server_port}, liên kết với Git repo: {repo_dir.name}")
+
+  try:
+   # Tạo ca bệnh PDF thực tế và mở qua /open_path
+   case_dir = self.root / 'benh_an_thuc_te'
+   case_dir.mkdir(parents=True, exist_ok=True)
+   real_pdf_path = case_dir / 'ho_so_benh_an_nguyen_van_a.pdf'
+   doc = fitz.open()
+   page = doc.new_page(width=595, height=842)
+   page.insert_text((50, 100), "BỆNH VIỆN ĐẠI HỌC Y HÀ NỘI - KHOA CẤP CỨU")
+   page.insert_text((50, 130), "Họ và tên bệnh nhân: Nguyễn Văn A  -  Năm sinh: 1985")
+   page.insert_text((50, 160), "Chẩn đoán ban đầu: Viêm phổi thùy cấp tính")
+   page.insert_text((50, 190), "Bác sĩ chỉ định: PGS.TS Trần Văn B")
+   doc.save(str(real_pdf_path))
+   doc.close()
+
+   log(f"[GIAI ĐOẠN 2] Bác sĩ đang duyệt 1 hồ sơ PDF thực tế: {real_pdf_path.name}")
+   code, open_res = self.req('POST', '/open_path', {'path': str(case_dir), 'study_id': 'BENH_AN_001'})
+   self.assertEqual(code, 200, open_res)
+   init_review = open_res['review']
+   initial_job_id = init_review['job_id']
+   log(f"  - Đã nạp thành công ca bệnh: job_id = {initial_job_id}")
+
+   # Bác sĩ thực hiện khử định danh trên trang 1 và lưu lại
+   clinical_note = "Đã che thông tin định danh họ tên bệnh nhân và bác sĩ chỉ định"
+   code, save_res = self.req('POST', '/save_page', {
+    **self.ident(init_review),
+    'page': 1,
+    'reviewed': True,
+    'manual_rects': [[50, 120, 350, 140], [50, 180, 300, 200]],
+    'note': clinical_note,
+    'selections': [],
+   })
+   self.assertEqual(code, 200, save_res)
+   log(f"  - Bác sĩ đã lưu duyệt trang 1 (revision {save_res['revision']}): manual_rects = 2 vùng, note = '{clinical_note}'")
+
+   # Đọc trạng thái ban đầu của ca bệnh và dữ liệu trong HMU_JOBS
+   code, state_before = self.req('GET', '/state')
+   self.assertEqual(code, 200)
+   self.assertEqual(state_before['review']['job_id'], initial_job_id)
+   self.assertEqual(state_before['review']['pages'][0]['reviewed'], True)
+   files_before = {p.relative_to(jobs_dir): p.stat().st_size for p in jobs_dir.rglob('*') if p.is_file()}
+   log(f"  - Snapshot dữ liệu HMU_JOBS/ ban đầu: {len(files_before)} tệp ghi nhận (bệnh án, manifest, SQLite DB)")
+
+   # Giai đoạn 3: Developer đẩy v3.1.1 và v3.2.0 lên Git remote
+   log(f"[GIAI ĐOẠN 3] Developer push 2 phiên bản v3.1.1 và v3.2.0 lên remote Git")
+   dev_dir = self.root / 'dev_workstation'
+   _run_git(self.root, 'clone', '-b', 'dev', str(remote_dir), str(dev_dir))
+   _run_git(dev_dir, 'config', 'user.email', 'dev_team@hmu.edu.vn')
+   _run_git(dev_dir, 'config', 'user.name', 'HMU Dev Team')
+
+   # Commit & Tag v3.1.1
+   (dev_dir / 'app.py').write_text('VERSION = "3.1.1"\n# HMU App Server - v3.1.1 patch release\n', encoding='utf-8')
+   (dev_dir / 'release_v311.txt').write_text('Bản vá lỗi v3.1.1: Tối ưu bộ nhớ đệm OCR\n', encoding='utf-8')
+   _run_git(dev_dir, 'add', 'app.py', 'release_v311.txt')
+   _run_git(dev_dir, 'commit', '-m', 'fix: patch release v3.1.1 cache optimization')
+   _run_git(dev_dir, 'tag', 'v3.1.1')
+   _run_git(dev_dir, 'push', 'origin', 'dev', '--tags')
+   v311_sha = _run_git(dev_dir, 'rev-parse', 'HEAD')
+   log(f"  - Đã push Tag v3.1.1 (Commit: {v311_sha[:7]})")
+
+   # Commit & Tag v3.2.0
+   (dev_dir / 'app.py').write_text('VERSION = "3.2.0"\n# HMU App Server - v3.2.0 major release\n', encoding='utf-8')
+   (dev_dir / 'release_v320.txt').write_text('Phiên bản v3.2.0: Hệ thống xử lý hàng loạt Batch Queue đa tiến trình\n', encoding='utf-8')
+   _run_git(dev_dir, 'add', 'app.py', 'release_v320.txt')
+   _run_git(dev_dir, 'commit', '-m', 'feat: major release v3.2.0 multi-process batch coordinator')
+   _run_git(dev_dir, 'tag', 'v3.2.0')
+   _run_git(dev_dir, 'push', 'origin', 'dev', '--tags')
+   v320_sha = _run_git(dev_dir, 'rev-parse', 'HEAD')
+   log(f"  - Đã push Tag v3.2.0 (Commit: {v320_sha[:7]} - latest dev HEAD)")
+
+   # Giai đoạn 4: Máy người dùng phát sinh chỉnh sửa cục bộ (dirty files), gọi /update/check
+   log(f"[GIAI ĐOẠN 4] Máy người dùng phát sinh chỉnh sửa cục bộ và kiểm tra cập nhật")
+   (repo_dir / 'app.py').write_text('VERSION = "3.1.0"\n# Bac si sua file cuc bo tren may tram\n', encoding='utf-8')
+   (repo_dir / 'bac_si_ghi_chu.txt').write_text('Ghi chú cục bộ chưa được commit\n', encoding='utf-8')
+   log(f"  - Đã tạo thay đổi bẩn (dirty): sửa app.py và thêm bac_si_ghi_chu.txt")
+
+   code, check_res = self.req('POST', '/update/check', {})
+   self.assertEqual(code, 200, check_res)
+   check_info = check_res['check']
+   self.assertTrue(check_info['update_available'], "Hệ thống phải phát hiện có bản cập nhật mới")
+   self.assertEqual(check_info['behind'], 2, "Hệ thống phải phát hiện đang đi sau 2 commits")
+   self.assertTrue(check_info['current']['dirty'], "Hệ thống phải nhận diện được working tree đang dirty")
+   self.assertEqual(len(check_info['incoming_commits']), 2)
+   tag_names = [t['name'] for t in check_res['versions']['tags']]
+   self.assertIn('v3.1.1', tag_names)
+   self.assertIn('v3.2.0', tag_names)
+   log(f"  - /update/check phản hồi: behind = {check_info['behind']}, update_available = {check_info['update_available']}")
+   log(f"  - Danh sách commits mới: {[c['subject'] for c in check_info['incoming_commits']]}")
+   log(f"  - Danh sách tags: {tag_names}")
+
+   # Giai đoạn 5: Áp dụng bản cập nhật v3.1.1 theo Tag
+   log(f"[GIAI ĐOẠN 5] Cập nhật lên Tag v3.1.1 (/update/apply)")
+   code, apply_311 = self.req('POST', '/update/apply', {
+    'target': 'v3.1.1',
+    'restart': False,
+    'run_pip': False,
+    'run_smoke_test': False,
+   })
+   self.assertEqual(code, 200, apply_311)
+   self.assertEqual(apply_311['result']['status'], 'switched')
+   self.assertEqual(apply_311['result']['to_commit'], v311_sha)
+   self.assertTrue(apply_311['result']['stashed'], "Phải tự động stash các thay đổi bẩn cục bộ")
+   self.assertEqual(_run_git(repo_dir, 'rev-parse', 'HEAD'), v311_sha)
+   self.assertTrue((repo_dir / 'release_v311.txt').exists())
+   self.assertFalse((repo_dir / 'release_v320.txt').exists())
+   log(f"  - Chuyển thành công sang Tag v3.1.1 (Commit: {v311_sha[:7]}), file release_v311.txt xuất hiện")
+
+   # Giai đoạn 6: Cập nhật lên bản mới nhất v3.2.0 (target='latest')
+   log(f"[GIAI ĐOẠN 6] Cập nhật lên bản mới nhất latest / v3.2.0 (/update/apply)")
+   code, apply_latest = self.req('POST', '/update/apply', {
+    'target': 'latest',
+    'restart': False,
+    'run_pip': False,
+    'run_smoke_test': False,
+   })
+   self.assertEqual(code, 200, apply_latest)
+   self.assertEqual(apply_latest['result']['status'], 'switched')
+   self.assertEqual(apply_latest['result']['to_commit'], v320_sha)
+   self.assertEqual(_run_git(repo_dir, 'rev-parse', 'HEAD'), v320_sha)
+   self.assertEqual(_run_git(repo_dir, 'rev-parse', '--abbrev-ref', 'HEAD'), 'dev', "Phải thoát Detached HEAD về nhánh dev")
+   self.assertTrue((repo_dir / 'release_v320.txt').exists())
+   log(f"  - Cập nhật thành công lên latest v3.2.0 (Commit: {v320_sha[:7]}), nhánh: dev, release_v320.txt xuất hiện")
+
+   # Giai đoạn 7: Quay lui (Rollback) lùi về v3.1.1
+   log(f"[GIAI ĐOẠN 7] Quay lui (Rollback) lùi về phiên bản trước đó v3.1.1 (/update/rollback)")
+   code, rollback_res = self.req('POST', '/update/rollback', {
+    'restart': False,
+    'run_pip': False,
+    'run_smoke_test': False,
+   })
+   self.assertEqual(code, 200, rollback_res)
+   self.assertEqual(rollback_res['result']['to_commit'], v311_sha, "Rollback phải lùi về chính xác commit của v3.1.1")
+   self.assertEqual(_run_git(repo_dir, 'rev-parse', 'HEAD'), v311_sha)
+   self.assertTrue((repo_dir / 'release_v311.txt').exists())
+   self.assertFalse((repo_dir / 'release_v320.txt').exists(), "File phiên bản v3.2.0 phải biến mất sau khi rollback")
+   log(f"  - Rollback thành công về v3.1.1 (Commit: {v311_sha[:7]}), release_v320.txt đã gỡ bỏ an toàn")
+
+   # Giai đoạn 8: Kiểm chứng 100% toàn vẹn dữ liệu ca bệnh và phiên làm việc
+   log(f"[GIAI ĐOẠN 8] Xác nhận tính toàn vẹn 100% dữ liệu ca bệnh trong HMU_JOBS/ và phiên GET /state")
+   code, state_after = self.req('GET', '/state')
+   self.assertEqual(code, 200, state_after)
+   self.assertIsNotNone(state_after.get('review'), "Phiên duyệt bệnh án phải còn nguyên vẹn")
+   self.assertEqual(state_after['review']['job_id'], initial_job_id)
+   self.assertEqual(state_after['review']['pages'][0]['reviewed'], True)
+   self.assertEqual(state_after['review']['pages'][0]['note'], clinical_note)
+   self.assertEqual(state_after['review']['pages'][0]['manual_rects'], [[50, 120, 350, 140], [50, 180, 300, 200]])
+
+   # Kiểm tra các file quan trọng trong HMU_JOBS/
+   updater_state_file = jobs_dir / 'updater_state.json'
+   self.assertTrue(updater_state_file.exists(), "Tệp updater_state.json phải tồn tại trong HMU_JOBS/")
+   up_data = json.loads(updater_state_file.read_text(encoding='utf-8'))
+   self.assertEqual(up_data['current_commit'], v311_sha)
+   self.assertEqual(len(up_data.get('history', [])), 3, "Lịch sử cập nhật phải ghi nhận đủ 3 lần chuyển: v3.1.1 -> v3.2.0 -> rollback v3.1.1")
+
+   session_file = jobs_dir / 'last_session.json'
+   self.assertTrue(session_file.exists(), "Tệp last_session.json phải tồn tại trong HMU_JOBS/")
+
+   case_manifests = list(jobs_dir.rglob('case_manifest.json'))
+   self.assertTrue(len(case_manifests) >= 1, "case_manifest.json phải nguyên vẹn trong HMU_JOBS/")
+
+   # Đảm bảo không có bất kỳ file PDF hay ảnh nào của bệnh nhân trong HMU_JOBS/ bị thất thoát
+   for rel_p, orig_size in files_before.items():
+    if rel_p.name in {'last_session.json', 'updater_state.json'}:
+     continue
+    cur_p = jobs_dir / rel_p
+    self.assertTrue(cur_p.exists(), f"Tệp ca bệnh {rel_p} bị mất trong HMU_JOBS/!")
+    self.assertEqual(cur_p.stat().st_size, orig_size, f"Kích thước tệp ca bệnh {rel_p} bị biến đổi!")
+
+   log(f"  - Toàn bộ {len(files_before)} tệp ca bệnh gốc, ảnh trang và manifest được bảo toàn 100%.")
+   log(f"  - Phiên duyệt bệnh án (job_id: {initial_job_id}, ghi chú, vùng che) khớp 100% với trước khi cập nhật.")
+   log(f"  - Lịch sử updater_state.json: {len(up_data['history'])} lượt chuyển giao an toàn.")
+   log("================================================================================")
+   log("KẾT LUẬN: BÀI TEST E2E ĐẠT 100% TIÊU CHÍ VÒNG ĐỜI UPDATE/ROLLBACK TRÊN DỮ LIỆU THẬT")
+   log("================================================================================")
+
+  finally:
+   # Dọn dẹp và khôi phục server gốc cho tearDown
+   try:
+    self.server.shutdown()
+    self.server.server_close()
+    self.thread.join()
+   except Exception:
+    pass
+   self.server = app.create_server(self.root / 'jobs', None, 0)
+   self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+   self.thread.start()
+
 
 
 if __name__=='__main__':unittest.main()
