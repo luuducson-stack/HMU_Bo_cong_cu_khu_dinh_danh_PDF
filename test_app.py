@@ -1208,5 +1208,161 @@ class AppTests(unittest.TestCase):
   self.thread.start()
   log(f"[KẾT QUẢ] Hoàn thành kiểm thử tích hợp E2E vòng đời phiên Folder đơn: ĐẠT 100% TIÊU CHÍ.")
 
+ def test_update_endpoints_check_apply_rollback_and_conflict_guard(self):
+  import subprocess, time, os
+  from unittest.mock import patch
+  def _run_git(cwd, *args):
+   p = subprocess.run(['git', *args], cwd=cwd, capture_output=True, text=True, check=True)
+   return p.stdout.strip()
+
+  remote_dir = self.root / 'remote.git'
+  repo_dir = self.root / 'repo_clone'
+  _run_git(self.root, 'init', '--bare', str(remote_dir))
+  _run_git(self.root, 'clone', str(remote_dir), str(repo_dir))
+  _run_git(repo_dir, 'config', 'user.email', 'hmu_test@hmu.edu.vn')
+  _run_git(repo_dir, 'config', 'user.name', 'HMU Tester')
+  _run_git(repo_dir, 'checkout', '-b', 'dev')
+  (repo_dir / 'app.py').write_text('VERSION = "3.1.0"\n', encoding='utf-8')
+  (repo_dir / 'requirements.txt').write_text('pymupdf>=1.24.0\n', encoding='utf-8')
+  _run_git(repo_dir, 'add', 'app.py', 'requirements.txt')
+  _run_git(repo_dir, 'commit', '-m', 'feat: initial v3.1.0 release')
+  _run_git(repo_dir, 'tag', 'v3.1.0')
+  _run_git(repo_dir, 'push', '-u', 'origin', 'dev', '--tags')
+  v1_sha = _run_git(repo_dir, 'rev-parse', 'HEAD')
+
+  self.server.repo_dir = repo_dir
+
+  # 1. Kiểm tra GET /update/status
+  code_403, _ = self.req('GET', '/update/status', headers={'Host': 'bad.host'})
+  self.assertEqual(code_403, 403)
+
+  code, status_data = self.req('GET', '/update/status')
+  self.assertEqual(code, 200, status_data)
+  self.assertEqual(status_data['current']['commit'], v1_sha)
+  self.assertEqual(status_data['current']['short_commit'], v1_sha[:7])
+  self.assertEqual(status_data['current']['branch'], 'dev')
+  self.assertFalse(status_data['current']['can_rollback'])
+  self.assertTrue(any(t['name'] == 'v3.1.0' for t in status_data['versions']['tags']))
+
+  # 2. Kiểm tra POST /update/check
+  code_bad_tok, _ = self.req('POST', '/update/check', {}, headers={'X-HMU-Token': 'wrong_token'})
+  self.assertEqual(code_bad_tok, 403)
+
+  code, check_data = self.req('POST', '/update/check', {})
+  self.assertEqual(code, 200, check_data)
+  self.assertEqual(check_data['check']['behind'], 0)
+  self.assertFalse(check_data['check']['update_available'])
+
+  # Peer clone push v3.2.0
+  peer_dir = self.root / 'peer_clone'
+  _run_git(self.root, 'clone', '-b', 'dev', str(remote_dir), str(peer_dir))
+  _run_git(peer_dir, 'config', 'user.email', 'peer@hmu.edu.vn')
+  _run_git(peer_dir, 'config', 'user.name', 'HMU Peer')
+  (peer_dir / 'app.py').write_text('VERSION = "3.2.0"\n', encoding='utf-8')
+  _run_git(peer_dir, 'add', 'app.py')
+  _run_git(peer_dir, 'commit', '-m', 'feat: update v3.2.0 with updater endpoints')
+  _run_git(peer_dir, 'tag', 'v3.2.0')
+  _run_git(peer_dir, 'push', 'origin', 'dev', '--tags')
+  v2_sha = _run_git(peer_dir, 'rev-parse', 'HEAD')
+
+  code, check_data2 = self.req('POST', '/update/check', {})
+  self.assertEqual(code, 200, check_data2)
+  self.assertEqual(check_data2['check']['behind'], 1)
+  self.assertTrue(check_data2['check']['update_available'])
+  self.assertEqual(check_data2['check']['remote_commit'], v2_sha)
+  self.assertEqual(len(check_data2['check']['incoming_commits']), 1)
+
+  # 3. Khóa an toàn 409 Conflict
+  case, state = self.open_local_case()
+  d = state['review']
+  started = threading.Event()
+  release = threading.Event()
+  original_export = app.export_reviewed_folder
+  def slow_export(*args, **kwargs):
+   started.set()
+   release.wait(5)
+   return original_export(*args, **kwargs)
+
+  with patch.object(app, 'export_reviewed_folder', side_effect=slow_export):
+   code_async, res_async = self.req('POST', '/export_folder', {**self.ident(d), 'destination': str(self.root / 'delivery_guard')}, {'X-HMU-Async': '1'})
+   self.assertEqual(code_async, 202)
+   self.assertTrue(started.wait(2))
+   try:
+    code_conflict1, err1 = self.req('POST', '/update/apply', {'target': 'latest', 'restart': False})
+    self.assertEqual(code_conflict1, 409, err1)
+    self.assertIn('Đang xử lý', err1.get('error', ''))
+    code_conflict2, err2 = self.req('POST', '/update/rollback', {'restart': False})
+    self.assertEqual(code_conflict2, 409, err2)
+   finally:
+    release.set()
+
+  for _ in range(100):
+   p_state = self.req('GET', '/progress?task_id=' + res_async['task_id'])[1]
+   if p_state['status'] != 'running':
+    break
+   time.sleep(0.02)
+
+  # Batch coordinator active > 0
+  coord_file = self.root / 'jobs' / 'batch' / 'coordinator_status.json'
+  coord_file.parent.mkdir(parents=True, exist_ok=True)
+  coord_file.write_text(json.dumps({'active': 3, 'running': True, 'heartbeat': time.time()}), encoding='utf-8')
+  try:
+   code_batch_conflict, err_batch = self.req('POST', '/update/apply', {'target': 'latest', 'restart': False})
+   self.assertEqual(code_batch_conflict, 409, err_batch)
+   self.assertIn('Đang xử lý', err_batch.get('error', ''))
+  finally:
+   coord_file.write_text(json.dumps({'active': 0, 'running': False}), encoding='utf-8')
+
+  # 4. POST /update/apply (áp dụng bản mới)
+  code_apply, res_apply = self.req('POST', '/update/apply', {'target': 'latest', 'restart': False, 'run_pip': False, 'run_smoke_test': False})
+  self.assertEqual(code_apply, 200, res_apply)
+  self.assertEqual(res_apply['result']['status'], 'switched')
+  self.assertEqual(res_apply['result']['to_commit'], v2_sha)
+  self.assertFalse(res_apply['restarting'])
+  self.assertEqual(_run_git(repo_dir, 'rev-parse', 'HEAD'), v2_sha)
+
+  # Kiểm tra session_path được save_session ghi nhận
+  session_file = self.root / 'jobs' / 'last_session.json'
+  self.assertTrue(session_file.exists())
+
+  # 5. POST /update/rollback
+  code_rollback, res_rollback = self.req('POST', '/update/rollback', {'restart': False, 'run_pip': False, 'run_smoke_test': False})
+  self.assertEqual(code_rollback, 200, res_rollback)
+  self.assertEqual(res_rollback['result']['to_commit'], v1_sha)
+  self.assertEqual(_run_git(repo_dir, 'rev-parse', 'HEAD'), v1_sha)
+
+  # 6. POST /update/apply với restart=True
+  with patch('threading.Timer') as mock_timer:
+   code_restart_apply, res_restart = self.req('POST', '/update/apply', {'target': 'v3.2.0', 'restart': True, 'run_pip': False, 'run_smoke_test': False})
+   self.assertEqual(code_restart_apply, 200)
+   self.assertTrue(res_restart['restarting'])
+   self.assertTrue(getattr(self.server, 'restart_requested', False))
+   self.assertTrue(mock_timer.called)
+   self.server.restart_requested = False
+
+ def test_main_restart_lifecycle_exits_with_code_42(self):
+  import sys
+  from unittest.mock import patch, MagicMock
+
+  mock_server = MagicMock()
+  mock_server.server_port = 8765
+  mock_server.restart_requested = True
+  mock_server.serve_forever.return_value = None
+
+  test_root = self.root / 'main_test_jobs'
+  test_root.mkdir(parents=True, exist_ok=True)
+
+  with patch.object(app, 'create_server', return_value=mock_server):
+   with patch.object(sys, 'argv', ['app.py', '--root', str(test_root), '--no-browser']):
+    with self.assertRaises(SystemExit) as ctx:
+     app.main()
+    self.assertEqual(ctx.exception.code, 42)
+
+  mock_server.restart_requested = False
+  with patch.object(app, 'create_server', return_value=mock_server):
+   with patch.object(sys, 'argv', ['app.py', '--root', str(test_root), '--no-browser']):
+    app.main()
+
+
 
 if __name__=='__main__':unittest.main()
