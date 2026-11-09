@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const elements = new Map();
 const timeouts = [];
 const windowListeners = {};
+let autoRunTimeouts = false;
 
 function createEl(id = '', initHide = false) {
   const classes = new Set(initHide ? ['hide'] : []);
@@ -14,7 +15,7 @@ function createEl(id = '', initHide = false) {
     id,
     tagName: id === 'note' || id === 'sid' || id === 'localPath' || id === 'pageNo' ? 'INPUT'
       : id === 'batchPaths' ? 'TEXTAREA'
-      : id === 'caseFile' || id === 'batchFilter' ? 'SELECT'
+      : id === 'caseFile' || id === 'batchFilter' || id === 'versionSelect' ? 'SELECT'
       : 'BUTTON',
     type: id === 'wholeCase' ? 'checkbox' : 'text',
     children: [],
@@ -25,6 +26,7 @@ function createEl(id = '', initHide = false) {
     blurred: false,
     attributes: {},
     parentElement: null,
+    style: {},
     classList: {
       add(...items) { items.forEach(x => classes.add(x)); },
       remove(...items) { items.forEach(x => classes.delete(x)); },
@@ -59,6 +61,7 @@ function createEl(id = '', initHide = false) {
     },
     focus() {},
     blur() { this.blurred = true; },
+    querySelectorAll(sel) { return []; },
     click() {
       if (!this.disabled && !this.classList.contains('hide') && typeof this.onclick === 'function') {
         return this.onclick();
@@ -68,7 +71,7 @@ function createEl(id = '', initHide = false) {
 }
 
 // Pre-create containers with their initial visibility state
-['batchPanel', 'folderPanel', 'batchReview', 'auditModal', 'offlineModal', 'workflow', 'prevFile', 'nextFile', 'filePos', 'caseFile', 'caseScope', 'download', 'shortcutPad'].forEach(id => {
+['batchPanel', 'folderPanel', 'batchReview', 'auditModal', 'offlineModal', 'workflow', 'prevFile', 'nextFile', 'filePos', 'caseFile', 'caseScope', 'download', 'shortcutPad', 'updateModal', 'updateDot'].forEach(id => {
   elements.set(id, createEl(id, true));
 });
 
@@ -107,6 +110,9 @@ const ctx = vm.createContext({
   setTimeout(fn, delay) {
     const item = { fn, delay };
     timeouts.push(item);
+    if (autoRunTimeouts && typeof fn === 'function') {
+      Promise.resolve().then(fn);
+    }
     return timeouts.length;
   },
   clearTimeout() {},
@@ -475,6 +481,174 @@ vm.runInContext(source, ctx);
   assert.ok(syncedRequests.some(r => r.url === '/save_page' && r.body.page === 2), 'Reconnecting must auto-sync saved page_patch to /save_page');
   assert.equal(vm.runInContext('pn', ctx), 1, 'Restored session must stay on page 2 (pn === 1)');
   assert.equal(vm.runInContext('localStorage.getItem("hmu_session_backup_v1")', ctx), null, 'Backup must be cleared after successful sync');
+
+  // =========================================================================
+  // 1.7 Git Version Badge, Update/Rollback Modal & Shortcut Blocking
+  // =========================================================================
+  autoRunTimeouts = true;
+  let serverRestarted = false;
+  const updateCalls = [];
+
+  ctx.window.location = {
+    reload() { serverRestarted = true; }
+  };
+
+  ctx.fetch = async (url, opts = {}) => {
+    const method = opts.method || 'GET';
+    const body = opts.body ? JSON.parse(opts.body) : null;
+    updateCalls.push({ url, method, body });
+
+    if (url === '/update/status') {
+      return {
+        ok: true,
+        json: async () => ({
+          current: {
+            commit: '24d7ede000000000000000000000000000000000',
+            short_commit: '24d7ede',
+            branch: 'dev',
+            tag: 'v3.1',
+            subject: 'feat: v3.1 release',
+            dirty: false,
+            previous_commit: '1111111000000000000000000000000000000000',
+            can_rollback: true
+          },
+          versions: {
+            current_commit: '24d7ede000000000000000000000000000000000',
+            previous_commit: '1111111000000000000000000000000000000000',
+            target_branch: 'dev',
+            tags: [{ name: 'v3.1', commit: '24d7ede000000000000000000000000000000000', short_commit: '24d7ede', subject: 'Release v3.1' }],
+            commits: [{ commit: '24d7ede000000000000000000000000000000000', short_commit: '24d7ede', subject: 'Initial v3.1', date: '2026-11-09' }]
+          }
+        })
+      };
+    }
+    if (url === '/update/check') {
+      return {
+        ok: true,
+        json: async () => ({
+          check: {
+            current: {
+              commit: '24d7ede000000000000000000000000000000000',
+              short_commit: '24d7ede',
+              branch: 'dev',
+              tag: 'v3.1',
+              subject: 'Initial v3.1',
+              previous_commit: '1111111000000000000000000000000000000000',
+              can_rollback: true
+            },
+            target_branch: 'dev',
+            remote_commit: '3333333000000000000000000000000000000000',
+            remote_short_commit: '3333333',
+            ahead: 0,
+            behind: 2,
+            update_available: true,
+            status: 'behind',
+            incoming_commits: [
+              { commit: '3333333000000000000000000000000000000000', short_commit: '3333333', subject: 'feat: new feature', author: 'HMU Dev', date: '2026-11-09' },
+              { commit: '2222222000000000000000000000000000000000', short_commit: '2222222', subject: 'fix: bug fix', author: 'HMU Dev', date: '2026-11-09' }
+            ]
+          },
+          versions: {
+            current_commit: '24d7ede000000000000000000000000000000000',
+            previous_commit: '1111111000000000000000000000000000000000',
+            target_branch: 'dev',
+            tags: [
+              { name: 'v3.2.0', commit: '3333333000000000000000000000000000000000', short_commit: '3333333', subject: 'v3.2.0 release', date: '2026-11-09' },
+              { name: 'v3.1.0', commit: '24d7ede000000000000000000000000000000000', short_commit: '24d7ede', subject: 'Initial v3.1', date: '2026-11-09' }
+            ],
+            commits: [
+              { commit: '3333333000000000000000000000000000000000', short_commit: '3333333', subject: 'feat: new feature', author: 'HMU Dev', date: '2026-11-09', is_remote_head: true },
+              { commit: '2222222000000000000000000000000000000000', short_commit: '2222222', subject: 'fix: bug fix', author: 'HMU Dev', date: '2026-11-09' },
+              { commit: '24d7ede000000000000000000000000000000000', short_commit: '24d7ede', subject: 'Initial v3.1', author: 'HMU Dev', date: '2026-11-09', is_current: true }
+            ]
+          }
+        })
+      };
+    }
+    if (url === '/update/apply') {
+      return {
+        ok: true,
+        json: async () => ({
+          result: { status: 'switched', from_commit: '24d7ede', to_commit: body?.target === 'latest' ? '3333333' : body?.target },
+          restarting: true
+        })
+      };
+    }
+    if (url === '/update/rollback') {
+      return {
+        ok: true,
+        json: async () => ({
+          result: { status: 'switched', from_commit: '3333333', to_commit: '1111111' },
+          restarting: true
+        })
+      };
+    }
+    return origFetch(url, opts);
+  };
+
+  // Test 1: loadUpdateStatus updates #versionBadge
+  await vm.runInContext('loadUpdateStatus()', ctx);
+  const versionBadge = elements.get('versionBadge');
+  assert.ok(versionBadge.textContent.includes('v3.1 · 24d7ede (dev)'), '#versionBadge must display version tag, short commit, and branch');
+  const updateDot = elements.get('updateDot');
+  assert.equal(updateDot.classList.contains('hide'), true, '#updateDot must remain hidden when no new updates detected');
+
+  // Test 2: open & close #updateModal and verify shortcut blocking
+  const updateModal = elements.get('updateModal');
+  assert.equal(updateModal.classList.contains('hide'), true, '#updateModal must initially be hidden');
+  elements.get('openUpdateModal').click();
+  assert.equal(updateModal.classList.contains('hide'), false, 'Clicking #openUpdateModal must open #updateModal');
+
+  // While #updateModal is open, left-hand shortcut must NOT trigger
+  const modeButton = elements.get('mode');
+  modeButton.classList.remove('kbd-active');
+  fireKey('KeyS', 's');
+  assert.equal(modeButton.classList.contains('kbd-active'), false, 'Keyboard shortcuts must be blocked when #updateModal is open');
+
+  // Escape key closes modal
+  fireKey('Escape', 'Escape');
+  assert.equal(updateModal.classList.contains('hide'), true, 'Pressing Escape must close #updateModal');
+
+  // Reopen and test #closeUpdateModal
+  elements.get('openUpdateModal').click();
+  assert.equal(updateModal.classList.contains('hide'), false);
+  elements.get('closeUpdateModal').click();
+  assert.equal(updateModal.classList.contains('hide'), true, 'Clicking #closeUpdateModal must close #updateModal');
+
+  // Reopen for actions
+  elements.get('openUpdateModal').click();
+
+  // Test 3: #btnCheckUpdate calls /update/check and renders #versionSelect
+  await elements.get('btnCheckUpdate').click();
+  assert.ok(updateCalls.some(c => c.url === '/update/check' && c.method === 'POST'), '#btnCheckUpdate must call POST /update/check');
+  assert.equal(updateDot.classList.contains('hide'), false, '#updateDot must be visible when update_available is true');
+  const compStatus = elements.get('updateComparisonStatus');
+  assert.ok(compStatus.textContent.includes('2 bản cập nhật mới trên Git'), 'Status must indicate 2 incoming updates on Git');
+
+  const versionSelect = elements.get('versionSelect');
+  assert.ok(versionSelect.children.length >= 2, '#versionSelect must contain optgroups for Tags and Commits');
+  const tagGroup = versionSelect.children.find(c => c.tagName === 'OPTGROUP' && c.attributes.label === 'Tags phát hành');
+  assert.ok(tagGroup, 'Must have <optgroup label="Tags phát hành">');
+  assert.ok(tagGroup.children.some(o => o.value === 'v3.2.0'), 'Tag group must include v3.2.0');
+
+  // Test 4: #btnUpdateLatest calls /update/apply with target latest and waits for restart
+  serverRestarted = false;
+  await elements.get('btnUpdateLatest').click();
+  assert.ok(updateCalls.some(c => c.url === '/update/apply' && c.body?.target === 'latest'), '#btnUpdateLatest must call POST /update/apply with target=latest');
+  assert.equal(serverRestarted, true, 'Server restart must trigger window.location.reload()');
+
+  // Test 5: #btnSwitchSelectedVersion calls /update/apply with selected version
+  versionSelect.value = 'v3.2.0';
+  serverRestarted = false;
+  await elements.get('btnSwitchSelectedVersion').click();
+  assert.ok(updateCalls.some(c => c.url === '/update/apply' && c.body?.target === 'v3.2.0'), '#btnSwitchSelectedVersion must call POST /update/apply with selected version');
+  assert.equal(serverRestarted, true);
+
+  // Test 6: #btnRollbackPrev calls /update/rollback and waits for restart
+  serverRestarted = false;
+  await elements.get('btnRollbackPrev').click();
+  assert.ok(updateCalls.some(c => c.url === '/update/rollback'), '#btnRollbackPrev must call POST /update/rollback');
+  assert.equal(serverRestarted, true);
 
   console.log('UI Left-Hand Shortcuts Test: ALL CHECKS PASSED');
 })().catch(e => {

@@ -43,7 +43,9 @@ let script=fs.readFileSync(__dirname+'/ui/review.js','utf8');script=script.slice
  ctx.fetch=async(path,opts)=>{
   const body=opts&&opts.body?JSON.parse(opts.body):{};
   pickCalls.push({path,body});
-  return {ok:true,json:async()=>({path:pickCalls.length===1?'E:/Cases/Ca01':pickCalls.length===2?'E:/Batch/Dot01':pickCalls.length===3?'E:/Batch/Dot02':pickCalls.length===4?'E:/Out/KetQua':null,cancelled:pickCalls.length>4})};
+  if(path==='/session/save')return {ok:true,json:async()=>({saved:true})};
+  const folderCalls=pickCalls.filter(c=>c.path==='/pick_folder');
+  return {ok:true,json:async()=>({path:folderCalls.length===1?'E:/Cases/Ca01':folderCalls.length===2?'E:/Batch/Dot01':folderCalls.length===3?'E:/Batch/Dot02':folderCalls.length===4?'E:/Out/KetQua':null,cancelled:folderCalls.length>4})};
  };
  vm.runInContext("$('localPath').value='';pickPromise=$('pickLocalFolder').onclick()",ctx);await vm.runInContext('pickPromise',ctx);
  assert.equal(pickCalls[0].path,'/pick_folder');
