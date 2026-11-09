@@ -312,9 +312,11 @@ async function syncOfflineSnapshotIfNeeded(serverState){
 }
 function pushSessionMeta(){
  if(workspaceMode!=='local'||queueId)return Promise.resolve();
+ const selected=$('localPath')?.value?.trim()||'';
+ if(!selected)return Promise.resolve();
  const curFile=files.find(f=>f.job_id===data?.job_id);
  const payload={
-  selected_path:$('localPath')?.value?.trim()||'',
+  selected_path:selected,
   destination:$('folderDestination')?.value?.trim()||'',
   study_id:$('sid')?.value?.trim()||'',
   whole_case:$('wholeCase')?.checked||false,
@@ -942,9 +944,19 @@ function handleShortcutKeydown(e) {
    auditModal.classList.add('hide');
    handled = true;
   }
+  const updateModal = $('updateModal');
+  if (updateModal && updateModal.classList && typeof updateModal.classList.contains === 'function' && !updateModal.classList.contains('hide')) {
+   updateModal.classList.add('hide');
+   handled = true;
+  }
   if (handled) {
    e.preventDefault();
   }
+  return;
+ }
+
+ const updateModal = $('updateModal');
+ if (updateModal && updateModal.classList && typeof updateModal.classList.contains === 'function' && !updateModal.classList.contains('hide')) {
   return;
  }
 
@@ -1012,5 +1024,339 @@ addInputListener($('folderDestination'), () => pushSessionMeta());
 addInputListener($('sid'), () => pushSessionMeta());
 addInputListener($('wholeCase'), () => pushSessionMeta());
 
+let updateStatusCache = null;
+
+function escapeHtml(str) {
+ if (!str) return '';
+ return String(str).replace(/[&<>"']/g, m => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+ }[m]));
+}
+
+function formatVersionBadge(current) {
+ if (!current) return '...';
+ const tagPart = current.tag ? current.tag + ' · ' : '';
+ const commitPart = current.short_commit || 'unknown';
+ const branchPart = ' (' + (current.branch || 'detached') + ')';
+ const dirtyPart = current.dirty ? ' *' : '';
+ return tagPart + commitPart + branchPart + dirtyPart;
+}
+
+function renderUpdateCurrentInfo(current) {
+ const box = $('updateCurrentInfo');
+ if (!box) return;
+ if (!current) {
+  box.textContent = 'Chưa có thông tin phiên bản';
+  return;
+ }
+ const tagDisplay = current.tag ? `<b>${escapeHtml(current.tag)}</b> · ` : '';
+ const dirtyDisplay = current.dirty ? ' · <span style="color:#cf1322;font-weight:600">Có thay đổi cục bộ</span>' : '';
+
+ box.replaceChildren();
+ const row1 = document.createElement('div');
+ row1.innerHTML = `<strong>Phiên bản hiện tại:</strong> ${tagDisplay}<code>${escapeHtml(current.short_commit || '')}</code> (${escapeHtml(current.branch || 'Detached HEAD')})${dirtyDisplay}`;
+ const row2 = document.createElement('div');
+ row2.className = 'muted small';
+ if (row2.style) row2.style.marginTop = '4px';
+ row2.textContent = `Commit: ${current.subject || ''} (${current.committed_at || ''})`;
+ box.append(row1, row2);
+ if (current.previous_commit) {
+  const row3 = document.createElement('div');
+  row3.className = 'muted small';
+  if (row3.style) row3.style.marginTop = '4px';
+  row3.innerHTML = `Bản trước đó (có thể Rollback): <code>${escapeHtml(current.previous_commit.slice(0, 7))}</code>`;
+  box.append(row3);
+ }
+}
+
+function renderComparisonStatus(check) {
+ const box = $('updateComparisonStatus');
+ if (!box) return;
+ box.className = 'update-status-block';
+ if (!check) {
+  box.textContent = 'Chưa kiểm tra với Git. Bấm "Kiểm tra trên Git" để làm mới.';
+  return;
+ }
+ if (check.offline) {
+  box.textContent = '⚠️ Mất kết nối Git remote (ngoại tuyến). Bạn vẫn có thể rollback về các bản có sẵn cục bộ.';
+  return;
+ }
+ if (check.update_available || check.behind > 0) {
+  box.classList.add('has-update');
+  box.textContent = `⭐ Có ${check.behind} bản cập nhật mới trên Git remote! Bấm "Cập nhật bản mới nhất" để nâng cấp.`;
+  return;
+ }
+ if (check.status === 'up_to_date') {
+  box.classList.add('up-to-date');
+  box.textContent = '✅ Đã ở bản mới nhất trên Git remote.';
+  return;
+ }
+ if (check.status === 'ahead') {
+  box.textContent = `Đang đi trước Git remote ${check.ahead} commit.`;
+  return;
+ }
+ if (check.status === 'detached') {
+  box.textContent = '⚠️ Đang ở phiên bản cũ (Detached HEAD). Bấm "Cập nhật bản mới nhất" để quay về nhánh chính.';
+  return;
+ }
+ if (check.status === 'diverged') {
+  box.textContent = `⚠️ Nhánh cục bộ và remote bị phân nhánh (ahead ${check.ahead}, behind ${check.behind}).`;
+  return;
+ }
+ box.textContent = `Trạng thái Git: ${check.status || 'OK'}`;
+}
+
+function renderVersionSelect(versions, currentCommit) {
+ const select = $('versionSelect');
+ if (!select) return;
+ select.replaceChildren();
+
+ const tags = versions?.tags || [];
+ const commits = versions?.commits || [];
+
+ if (!tags.length && !commits.length) {
+  const opt = document.createElement('option');
+  opt.value = '';
+  opt.textContent = '-- Không tìm thấy phiên bản nào --';
+  select.append(opt);
+  return;
+ }
+
+ if (tags.length) {
+  const tagGroup = document.createElement('optgroup');
+  tagGroup.setAttribute('label', 'Tags phát hành');
+  tags.forEach(t => {
+   const opt = document.createElement('option');
+   opt.value = t.name;
+   const cur = t.is_current || (currentCommit && t.commit === currentCommit) ? ' [Hiện tại]' : '';
+   opt.textContent = `${t.name} - ${t.subject || ''} (${t.short_commit})${cur}`;
+   tagGroup.append(opt);
+  });
+  select.append(tagGroup);
+ }
+
+ if (commits.length) {
+  const commitGroup = document.createElement('optgroup');
+  commitGroup.setAttribute('label', 'Lịch sử Commit');
+  commits.forEach(c => {
+   const opt = document.createElement('option');
+   opt.value = c.commit;
+   const cur = c.is_current || (currentCommit && c.commit === currentCommit) ? ' [Hiện tại]' : (c.is_previous ? ' [Trước đó]' : '');
+   const remote = c.is_remote_head ? ' [Remote Head]' : '';
+   opt.textContent = `${c.short_commit} - ${c.subject || ''} (${c.date || ''})${cur}${remote}`;
+   commitGroup.append(opt);
+  });
+  select.append(commitGroup);
+ }
+}
+
+async function loadUpdateStatus() {
+ try {
+  const res = await fetch('/update/status');
+  if (!res.ok) return;
+  const data = await res.json();
+  if (!data || !data.current) return;
+  updateStatusCache = data;
+  const current = data.current;
+  if ($('versionBadge')) {
+   $('versionBadge').textContent = 'Phiên bản: ' + formatVersionBadge(current);
+  }
+  if ($('btnRollbackPrev')) {
+   $('btnRollbackPrev').disabled = !current.can_rollback;
+  }
+  renderUpdateCurrentInfo(current);
+  if (data.versions) {
+   renderVersionSelect(data.versions, current.commit);
+  }
+  if ($('updateComparisonStatus') && !$('updateComparisonStatus').textContent) {
+   renderComparisonStatus(null);
+  }
+ } catch (_) {}
+}
+
+async function checkGitUpdates() {
+ const btn = $('btnCheckUpdate');
+ const oldText = btn ? btn.textContent : '';
+ if (btn) { btn.disabled = true; btn.textContent = 'Đang kiểm tra Git…'; }
+ try {
+  const res = await fetch('/update/check', {
+   method: 'POST',
+   headers: { 'Content-Type': 'application/json', 'X-HMU-Token': token },
+   body: JSON.stringify({ fetch: true })
+  });
+  if (!res.ok) {
+   const err = await res.json().catch(() => ({}));
+   throw Error(err.error || 'Lỗi khi kiểm tra Git');
+  }
+  const data = await res.json();
+  const check = data.check;
+  const versions = data.versions;
+  if (check?.current) {
+   if ($('versionBadge')) $('versionBadge').textContent = 'Phiên bản: ' + formatVersionBadge(check.current);
+   renderUpdateCurrentInfo(check.current);
+   if ($('btnRollbackPrev')) {
+    const canRb = check.current.can_rollback !== undefined ? !!check.current.can_rollback : !!check.current.previous_commit;
+    $('btnRollbackPrev').disabled = !canRb;
+   }
+  }
+  if ($('updateDot')) {
+   $('updateDot').classList.toggle('hide', !check?.update_available);
+  }
+  renderComparisonStatus(check);
+  if (versions) {
+   renderVersionSelect(versions, check?.current?.commit);
+  }
+  if (check?.update_available) {
+   notify(`Có ${check.behind} bản cập nhật mới trên Git`, 'info');
+  } else if (check?.status === 'up_to_date') {
+   notify('Công cụ đang ở phiên bản mới nhất', 'success');
+  }
+ } catch (e) {
+  status(e.message, true);
+  notify(formatErrorToast(e), 'err');
+  if ($('updateComparisonStatus')) {
+   $('updateComparisonStatus').textContent = '⚠️ Lỗi kiểm tra: ' + e.message;
+  }
+ } finally {
+  if (btn) { btn.disabled = false; btn.textContent = oldText; }
+ }
+}
+
+async function waitForServerRestart(pollInterval = 1000, maxAttempts = 30) {
+ const notice = $('updateRestartNotice');
+ if (notice) {
+  notice.textContent = 'Đang khởi động lại phiên bản mới... Vui lòng đợi trong giây lát.';
+  notice.classList.remove('hide');
+ }
+ const modal = $('updateModal');
+ if (modal && typeof modal.querySelectorAll === 'function') {
+  modal.querySelectorAll('button, select').forEach(b => { if (b.id !== 'closeUpdateModal') b.disabled = true; });
+ }
+ for (let i = 0; i < maxAttempts; i++) {
+  if (pollInterval > 0) {
+   await new Promise(r => setTimeout(r, pollInterval));
+  }
+  try {
+   const res = await fetch('/update/status');
+   if (res && res.ok) {
+    if (window.location && typeof window.location.reload === 'function') {
+     window.location.reload();
+    }
+    return true;
+   }
+  } catch (_) {}
+ }
+ if (notice) {
+  notice.textContent = 'Server khởi động lại lâu hơn dự kiến. Hãy kiểm tra màn hình Terminal hoặc tải lại trang.';
+ }
+ return false;
+}
+
+async function applyGitVersion(target) {
+ if (!target) {
+  notify('Vui lòng chọn một phiên bản để chuyển đổi', 'err');
+  return;
+ }
+ const isLatest = target === 'latest';
+ const label = isLatest ? 'bản mới nhất' : `phiên bản "${target}"`;
+ if (typeof window.confirm === 'function' && !window.confirm(`Xác nhận chuyển sang ${label}? Công cụ sẽ tự khởi động lại.`)) {
+  return;
+ }
+ const notice = $('updateRestartNotice');
+ if (notice) {
+  notice.textContent = `Đang chuyển sang ${label}...`;
+  notice.classList.remove('hide');
+ }
+ try {
+  const res = await fetch('/update/apply', {
+   method: 'POST',
+   headers: { 'Content-Type': 'application/json', 'X-HMU-Token': token },
+   body: JSON.stringify({ target, restart: true })
+  });
+  if (!res.ok) {
+   const err = await res.json().catch(() => ({}));
+   throw Error(err.error || 'Lỗi khi chuyển phiên bản');
+  }
+  const data = await res.json();
+  if (data.restarting) {
+   await waitForServerRestart();
+  } else {
+   notify(`Đã chuyển sang ${label}`, 'success');
+   await loadUpdateStatus();
+  }
+ } catch (e) {
+  if (notice) notice.classList.add('hide');
+  status(e.message, true);
+  notify(formatErrorToast(e), 'err');
+ }
+}
+
+async function rollbackGitVersion() {
+ if (typeof window.confirm === 'function' && !window.confirm('Xác nhận quay lại phiên bản trước đó (Rollback)? Công cụ sẽ tự khởi động lại.')) {
+  return;
+ }
+ const notice = $('updateRestartNotice');
+ if (notice) {
+  notice.textContent = 'Đang quay lại phiên bản trước đó...';
+  notice.classList.remove('hide');
+ }
+ try {
+  const res = await fetch('/update/rollback', {
+   method: 'POST',
+   headers: { 'Content-Type': 'application/json', 'X-HMU-Token': token },
+   body: JSON.stringify({ restart: true })
+  });
+  if (!res.ok) {
+   const err = await res.json().catch(() => ({}));
+   throw Error(err.error || 'Lỗi khi quay lại phiên bản trước');
+  }
+  const data = await res.json();
+  if (data.restarting) {
+   await waitForServerRestart();
+  } else {
+   notify('Đã quay lại phiên bản trước đó', 'success');
+   await loadUpdateStatus();
+  }
+ } catch (e) {
+  if (notice) notice.classList.add('hide');
+  status(e.message, true);
+  notify(formatErrorToast(e), 'err');
+ }
+}
+
+if ($('openUpdateModal')) {
+ $('openUpdateModal').onclick = () => {
+  const modal = $('updateModal');
+  if (modal) modal.classList.remove('hide');
+  if (!updateStatusCache) loadUpdateStatus();
+ };
+}
+if ($('closeUpdateModal')) {
+ $('closeUpdateModal').onclick = () => {
+  const modal = $('updateModal');
+  if (modal) modal.classList.add('hide');
+ };
+}
+if ($('btnCheckUpdate')) {
+ $('btnCheckUpdate').onclick = () => checkGitUpdates();
+}
+if ($('btnUpdateLatest')) {
+ $('btnUpdateLatest').onclick = () => applyGitVersion('latest');
+}
+if ($('btnRollbackPrev')) {
+ $('btnRollbackPrev').onclick = () => rollbackGitVersion();
+}
+if ($('btnSwitchSelectedVersion')) {
+ $('btnSwitchSelectedVersion').onclick = () => {
+  const sel = $('versionSelect')?.value;
+  if (!sel) {
+   notify('Vui lòng chọn một phiên bản trong danh sách', 'err');
+   return;
+  }
+  return applyGitVersion(sel);
+ };
+}
+
 syncShortcutHints();
+loadUpdateStatus().catch(() => {});
 fetch('/state').then(r=>{if(!r.ok)throw Error('Không đọc được phiên HMU');return r.json()}).then(async s=>{token=s.token;if(s.workspace)applyWorkspace(s.workspace);await syncOfflineSnapshotIfNeeded(s);acceptState(s,true);if(s.active_task?.status==='running'&&s.active_task.task_id)resumeTask(s.active_task.task_id);pollBatch()}).catch(e=>{showOfflineModal('Không kết nối được máy chủ HMU. Hãy bật MO_CONG_CU.bat');status(e.message,true);notify(formatErrorToast(e),'err');pollBatch()});
