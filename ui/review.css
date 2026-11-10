@@ -57,12 +57,15 @@ aside { padding: 12px; background: white; border-radius: 10px; min-width: 0; }
 #help { color: var(--muted); font-size: 13px; }
 .hide { display: none !important; }
 .toast-container {
-  position: fixed; top: 100px; right: 20px; z-index: 99; overflow-x: hidden;
+  position: fixed; top: 100px; right: 20px; z-index: 99;
   display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
-  max-width: min(440px, calc(100vw - 32px)); pointer-events: none;
+  width: min(440px, calc(100vw - 40px)); pointer-events: none;
 }
+/* Long messages and unbreakable file names wrap inside the box instead of being clipped by the container. */
 .pill-toast {
-  padding: 9px 18px; border-radius: 999px; font-size: 13.5px; font-weight: 550;
+  box-sizing: border-box; max-width: 100%; max-height: 45vh; overflow-y: auto; cursor: pointer;
+  padding: 10px 16px; border-radius: 16px; font-size: 13.5px; font-weight: 550; line-height: 1.45;
+  white-space: pre-wrap; overflow-wrap: anywhere;
   box-shadow: 0 8px 24px rgba(21, 38, 57, .16); pointer-events: auto;
   transition: transform .28s cubic-bezier(0.22, 1, 0.36, 1), opacity .28s cubic-bezier(0.22, 1, 0.36, 1);
   animation: pillToastIn .28s cubic-bezier(0.22, 1, 0.36, 1);
@@ -172,3 +175,6 @@ button.kbd-active, .ergo-key.kbd-active {
   button { min-height: 44px; }
   .ergo-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+.file-issues { border-left: 4px solid #c0392b; background: #fff7f6; margin: 8px 0; }
+.file-issues .issues-head { margin: 0 0 6px; font-weight: 700; color: #861d24; }
+.file-issues .item { overflow-wrap: anywhere; }

@@ -10,6 +10,7 @@ import sys
 import time
 
 import engine
+from error_pipeline import vi_message
 from engine import export, save_json
 
 _WINDOWS_RESERVED_NAMES = {
@@ -334,10 +335,13 @@ def export_reviewed_folder(owner, destination, *, internal_root, progress_cb=Non
         try:
             review=engine.ensure_job(job)
             name=item.get('source_name',review.get('original_name',review.get('source_file',name)))
-            if not all(p['reviewed'] for p in review['pages']):raise ValueError('Cần duyệt tất cả trang trước khi xuất')
+            if not all(p['reviewed'] for p in review['pages']):
+                raise engine.ReviewError('Cần duyệt tất cả trang trước khi xuất',pages=[p['page'] for p in review['pages'] if not p['reviewed']])
             if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}',review['study_id']):raise ValueError('Invalid research ID')
         except (OSError,ValueError,RuntimeError,KeyError) as exc:
-            pending.append(dict(index=index if is_case else None,source_name=name,reason=str(exc)))
+            where=getattr(exc,'where',None) or {}
+            pending.append(dict(index=index if is_case else None,source_name=name,reason=vi_message(str(exc),where),
+                                where={**where,'file':name}))
             continue
         source_pdf_name(name)
         if name.casefold() in names:raise ValueError('Trùng tên PDF nguồn; không thể xuất chung mà giữ nguyên tên')

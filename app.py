@@ -1,5 +1,5 @@
 """Single-user localhost review application v2.0; no cloud services."""
-import argparse, json, os, re, secrets, threading, time, unicodedata, urllib.parse, urllib.request, webbrowser
+import argparse, json, os, re, secrets, subprocess, threading, time, unicodedata, urllib.parse, urllib.request, webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from delivery import (
@@ -253,6 +253,7 @@ def create_server(root: Path, active: Path | None = None, port: int = 0, repo_di
             item={k:row[k] for k in ('id','source_path','source_name','pages','state','error','duplicate_of','revision','updated')}
             item.update(qc_status=qc.get('status'),warnings=qc.get('finding_count',0)+qc.get('unreadable_count',0),
                         seconds=row['result'].get('machine_seconds'),download=bool(row['result'].get('output')),
+                        issues=qc.get('issues',[]),unreadable_pages=qc.get('unreadable_pages',[]),
                         can_open=(Path(row['job_dir'])/'review'/'review.json').is_file(),
                         error_detail=row['result'].get('error_detail'))
             items.append(item)
@@ -481,7 +482,7 @@ def create_server(root: Path, active: Path | None = None, port: int = 0, repo_di
                 return result
             except Exception as exc:
                 err = record_error_event(root, exc, stage=stage, source_file=source_file, job_id=job_id)
-                with lock: progress.update(status='error', error=str(exc), error_detail=err, progress='')
+                with lock: progress.update(status='error', error=err['message'], error_detail=err, progress='')
                 if not async_mode: raise
         if async_mode:
             threading.Thread(target=execute, daemon=True).start()
@@ -545,9 +546,13 @@ def create_server(root: Path, active: Path | None = None, port: int = 0, repo_di
                                 self.send(200,doc[pn-1].get_pixmap(dpi=120,alpha=False).tobytes('png'),'image/png');return
                     if path == '/update/status':
                         repo = getattr(self.server, 'repo_dir', Path(__file__).resolve().parent)
-                        current_info = updater.get_current_version_info(repo, state_dir=root)
+                        try:
+                            current_info = updater.get_current_version_info(repo, state_dir=root)
+                        except (subprocess.CalledProcessError, FileNotFoundError):
+                            # Folder copied by USB/zip (no .git) or git not installed: normal state, not an application error.
+                            self.send(200, {'git_available': False, 'current': None, 'versions': None}); return
                         versions_info = updater.list_versions(repo, state_dir=root)
-                        self.send(200, {'current': current_info, 'versions': versions_info}); return
+                        self.send(200, {'git_available': True, 'current': current_info, 'versions': versions_info}); return
                     if not active: self.send(404, {'error':'No active job'}); return
                     d = read_review(active)
                     if q.get('job_id', [''])[0] != d['job_id']: raise Conflict('Job changed; reload state')
@@ -576,10 +581,10 @@ def create_server(root: Path, active: Path | None = None, port: int = 0, repo_di
                     self.send(404, {'error':'Not found'})
             except Conflict as exc:
                 err = record_error_event(root, exc, stage='CONFLICT', http_path=path)
-                self.send(409, {'error':str(exc), 'code':'CONFLICT', 'error_detail': err})
+                self.send(409, {'error':err['message'], 'code':'CONFLICT', 'error_detail': err})
             except Exception as exc:
                 err = record_error_event(root, exc, stage='HTTP_API', http_path=path)
-                self.send(400, {'error':str(exc), 'error_detail': err})
+                self.send(400, {'error':err['message'], 'error_detail': err})
         def do_POST(self):
             nonlocal active, case_root, active_queue_id
             if not self.host_ok() or self.headers.get('X-HMU-Token') != token:
@@ -887,7 +892,7 @@ def create_server(root: Path, active: Path | None = None, port: int = 0, repo_di
                     self.send(404,{'error':'Not found'})
             except Conflict as exc:
                 err=record_error_event(root,exc,stage='CONFLICT',http_path=path)
-                self.send(409,{'error':str(exc),'code':'CONFLICT','error_detail':err})
+                self.send(409,{'error':err['message'],'code':'CONFLICT','error_detail':err})
             except Exception as exc:
                 stg='WORKSPACE_INIT' if path=='/workspace/init' else ('OPEN_PATH' if path=='/open_path' else ('UPLOAD' if path=='/upload' else 'HTTP_API'))
                 src_f=None
@@ -899,7 +904,7 @@ def create_server(root: Path, active: Path | None = None, port: int = 0, repo_di
                         src_f=original_name or None
                 except Exception:pass
                 err=record_error_event(root,exc,stage=stg,source_file=src_f,http_path=path)
-                self.send(400,{'error':str(exc),'error_detail':err})
+                self.send(400,{'error':err['message'],'error_detail':err})
     class LocalServer(ThreadingHTTPServer):
         allow_reuse_address = False
         def server_bind(self):

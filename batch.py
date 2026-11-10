@@ -9,7 +9,7 @@ import secrets
 import shutil
 import sqlite3
 import time
-from error_pipeline import record_error_event
+from error_pipeline import record_error_event, vi_message
 
 
 RUNNING = {'PREPARING', 'EXPORTING', 'VERIFYING'}
@@ -166,6 +166,8 @@ def enqueue(db_path: Path, sources: list[Path], *, target_folders: dict | list |
         prepared.append((source, target_folder, digest, pages, error, err_record))
     ids = []
     with _db(db_path) as con:
+        # Windows clock ticks ~15ms: ties would fall back to the random id and break FIFO order and duplicate-original choice.
+        last_created = con.execute('SELECT coalesce(max(created),0) FROM jobs').fetchone()[0]
         for source, target_folder, digest, pages, error, err_record in prepared:
             old = con.execute('SELECT id,state,target_folder FROM jobs WHERE source_path=? AND source_sha256=?', (str(source), digest)).fetchone()
             if old:
@@ -185,7 +187,7 @@ def enqueue(db_path: Path, sources: list[Path], *, target_folders: dict | list |
                 (digest,),
             ).fetchone()
             ident = secrets.token_hex(16)
-            now = time.time()
+            now = last_created = max(time.time(), last_created + 1e-6)
             state = 'FAILED' if error else ('DUPLICATE' if duplicate else 'QUEUED')
             res_json = json.dumps({'error_detail': {**err_record, 'job_id': ident, 'queue_id': ident}}, ensure_ascii=False) if err_record else '{}'
             con.execute(
@@ -216,7 +218,12 @@ _SUMMARY_FIELDS = '''id,source_path,source_name,source_sha256,pages,state,job_di
       'error_detail',json_extract(result_json,'$.error_detail'),
       'verification',json_object('status',json_extract(result_json,'$.verification.status'),
         'finding_count',coalesce(json_array_length(result_json,'$.verification.findings'),0),
-        'unreadable_count',coalesce(json_array_length(result_json,'$.verification.unreadable_pages'),0))) AS result_json'''
+        'unreadable_count',coalesce(json_array_length(result_json,'$.verification.unreadable_pages'),0),
+        'unreadable_pages',json(coalesce(json_extract(result_json,'$.verification.unreadable_pages'),'[]')),
+        -- page/kind/reason only (never the finding text) so the 2s poll stays free of PHI; capped for big reports
+        'issues',json((SELECT json_group_array(json_object('page',json_extract(f.value,'$.page'),
+            'kind',json_extract(f.value,'$.kind'),'reason',json_extract(f.value,'$.reason')))
+            FROM (SELECT value FROM json_each(result_json,'$.verification.findings') LIMIT 40) AS f)))) AS result_json'''
 
 
 def list_jobs(db_path: Path, *, details=True) -> list[dict]:
@@ -521,7 +528,7 @@ def _admit_pending_workers(
                 job_id=row['id'],
                 queue_id=row['id'],
             )
-            set_stage_result(db_path, row['id'], expected_state='PREPARING', result={'state': 'FAILED', 'error': str(exc), 'error_detail': err})
+            set_stage_result(db_path, row['id'], expected_state='PREPARING', result={'state': 'FAILED', 'error': err['message'], 'error_detail': err})
             raise
         active[row['id']] = dict(process=managed, attempt_id=attempt, started=time.monotonic())
         pending = [r for r in pending if r['id'] != row['id']]
@@ -621,6 +628,16 @@ def run_queue(
     for row in list_jobs(db_path, details=False):
         states[row['state']] += 1
     return dict(seconds=time.perf_counter() - started, max_active_jobs=maximum, peak_sampled_rss_bytes=peak, states=states)
+
+
+def run_if_idle(db_path: Path, **options) -> dict:
+    """Coordinator entry point: a second launch (double click, resume right after start) exits quietly, no traceback."""
+    try:
+        return run_queue(db_path, **options)
+    except RuntimeError as exc:
+        if 'already has a running coordinator' not in str(exc):
+            raise
+        return {'already_running': True}
 
 
 def start_background(db_path: Path, *, jobs=2, ocr_workers=1, render_workers=1):
@@ -841,7 +858,7 @@ def _delete_jobs(db_path, job_ids):
                 locks.enter_context(queue_lock(root / 'review_operation'))
                 candidates.append(row)
             except (OSError, ValueError, RuntimeError) as exc:
-                skipped.append(dict(id=ident, source_name=row['source_name'] if row else ident, reason=str(exc)))
+                skipped.append(dict(id=ident, source_name=row['source_name'] if row else ident, reason=vi_message(str(exc))))
         # Mark the whole selection before releasing locks, so a duplicate cannot be claimed mid-delete.
         with _db(db_path) as con:
             marked = []
@@ -878,9 +895,10 @@ def _delete_jobs(db_path, job_ids):
 
 
 def _approved_output(row, expected_revision):
+    import engine
     review, qc, pdf = current_verification(row, expected_revision)
     if not all(p['reviewed'] for p in review['pages']):
-        raise ValueError('Cần duyệt tất cả trang trước khi bàn giao')
+        raise engine.ReviewError('Cần duyệt tất cả trang trước khi bàn giao', pages=[p['page'] for p in review['pages'] if not p['reviewed']])
     issues, _, _ = review_issues(row, qc)
     if not qc['structural_ok'] or qc['pages_checked'] != qc['pages_expected'] or any(not f['resolved'] for f in issues):
         raise ValueError('QC còn cảnh báo chưa xử lý hoặc kiểm tra thiếu trang')
@@ -956,6 +974,21 @@ def release_job(db_path: Path, job_id: str, *, expected_revision: int, destinati
         return released
 
 
+def _blocking_issues(db_path, candidate):
+    """Unresolved QC warnings of one blocked file as [{page, kind, reason}] (no finding text), best effort."""
+    import engine
+    if candidate['state'] not in {'NEEDS_REVIEW', 'READY'}:
+        return []
+    try:
+        row = get_job(db_path, candidate['id'])
+        review = engine.ensure_job(Path(row['job_dir']) / 'review')
+        _, qc, _ = current_verification(row, review['revision'])
+        issues, _, _ = review_issues(row, qc)
+    except (OSError, ValueError, RuntimeError, KeyError):
+        return []
+    return [dict(page=i['page'], kind=i['kind'], reason=i.get('reason', 'unreadable_page')) for i in issues if not i['resolved']]
+
+
 def release_folder(db_path, paths, destination):
     import engine
     from collections import Counter
@@ -1004,7 +1037,9 @@ def release_folder(db_path, paths, destination):
                 name = source_pdf_name(row['source_name'])
                 approved.append((row, pdf, manifest, report, name))
             except (OSError, ValueError, RuntimeError, KeyError) as exc:
-                pending.append(dict(id=candidate['id'], source_name=candidate['source_name'], reason=str(exc)))
+                where = getattr(exc, 'where', None) or {}
+                pending.append(dict(id=candidate['id'], source_name=candidate['source_name'], reason=vi_message(str(exc), where),
+                                    issues=_blocking_issues(db_path, candidate), where={**where, 'file': candidate['source_name']}))
 
         if approved:
             groups = {}
@@ -1115,7 +1150,7 @@ def main():
     if args.command == 'enqueue':
         result = {'ids': enqueue(path, discover_sources(args.input_dir))}
     elif args.command == 'run':
-        result = run_queue(path, jobs=args.jobs, ocr_workers=args.ocr_workers, render_workers=args.render_workers)
+        result = run_if_idle(path, jobs=args.jobs, ocr_workers=args.ocr_workers, render_workers=args.render_workers)
     elif args.command == 'pause':
         pause_queue(path)
         result = {'paused': True}
