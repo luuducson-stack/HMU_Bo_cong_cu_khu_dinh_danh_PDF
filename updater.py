@@ -1,16 +1,28 @@
 from __future__ import annotations
 
-import hashlib
+import io
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
+import urllib.request
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+REPO = 'luuducson-stack/HMU_Bo_cong_cu_khu_dinh_danh_PDF'
+BRANCH = 'dev'
+REFS_URL = f'https://github.com/{REPO}.git/info/refs?service=git-upload-pack'
+ZIP_URL = f'https://codeload.github.com/{REPO}/zip/refs/heads/{BRANCH}'
+USER_AGENT = {'User-Agent': 'hmu-updater'}
+
 EXCLUDED_DIR_PREFIXES = ('HMU_JOBS', '.venv')
 STATE_FILENAME = 'updater_state.json'
+BACKUP_DIRNAME = 'update_backup'
+SHA_RE = re.compile(r'^[0-9a-f]{40}$')
 DEFAULT_CORE_MODULES = (
     'app',
     'engine',
@@ -26,28 +38,8 @@ DEFAULT_CORE_MODULES = (
 )
 
 
-def _resolve_repo_and_state(repo_dir: Path | str, state_dir: Path | str | None = None) -> tuple[Path, Path]:
-    repo = Path(repo_dir).resolve()
-    state = Path(state_dir).resolve() if state_dir is not None else (repo / 'HMU_JOBS')
-    return repo, state
-
-
-def _run_git(
-    repo_dir: Path,
-    *args: str,
-    check: bool = True,
-    timeout: int | float | None = 30,
-) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ['git', *args],
-        cwd=repo_dir,
-        capture_output=True,
-        text=True,
-        encoding='utf-8',
-        errors='replace',
-        check=check,
-        timeout=timeout,
-    )
+class UpdateError(RuntimeError):
+    """A user-facing update failure; the message is Vietnamese and safe to show as is."""
 
 
 def _read_updater_state(state_dir: Path) -> dict[str, Any]:
@@ -69,12 +61,6 @@ def _write_updater_state(state_dir: Path, data: dict[str, Any]) -> None:
     tmp_file.replace(state_file)
 
 
-def _file_sha256(path: Path) -> str | None:
-    if not path.is_file():
-        return None
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
 def _is_excluded_path(rel_path: str) -> bool:
     norm = rel_path.strip().strip('"').replace('\\', '/')
     while norm.startswith('./'):
@@ -85,326 +71,50 @@ def _is_excluded_path(rel_path: str) -> bool:
     return False
 
 
-def _get_dirty_files(repo_dir: Path) -> list[str]:
-    proc = _run_git(
-        repo_dir,
-        'status',
-        '--porcelain',
-        '--untracked-files=all',
-        '--',
-        '.',
-        ':(exclude)HMU_JOBS',
-        ':(exclude).venv',
-        check=False,
-    )
-    if proc.returncode != 0:
-        return []
-    dirty: list[str] = []
-    for raw_line in proc.stdout.splitlines():
-        if len(raw_line) < 4:
-            continue
-        path_part = raw_line[3:].strip()
-        if ' -> ' in path_part:
-            path_part = path_part.split(' -> ', 1)[1].strip()
-        path_part = path_part.strip('"')
-        if path_part and not _is_excluded_path(path_part):
-            dirty.append(path_part)
-    return dirty
+def _fetch(url: str, timeout: int | float, limit: int, attempts: int = 3) -> bytes:
+    # Observed 2026-11-12: codeload.github.com sometimes stalls a read for the whole timeout, then the next request takes 0.6s.
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=USER_AGENT), timeout=timeout) as resp:
+                data = resp.read(limit + 1)
+            break
+        except (OSError, ValueError) as exc:  # URLError, HTTPError and timeouts are all OSError
+            if attempt == attempts - 1:
+                raise UpdateError('Không kết nối được GitHub. Hãy kiểm tra Internet rồi thử lại.') from exc
+    if len(data) > limit:
+        raise UpdateError('Phản hồi từ GitHub quá lớn, đã hủy để đảm bảo an toàn.')
+    return data
 
 
-def _tags_at_commit(repo_dir: Path, commit_ref: str = 'HEAD') -> list[str]:
-    proc = _run_git(
-        repo_dir,
-        'tag',
-        '--points-at',
-        commit_ref,
-        '--sort=-creatordate',
-        check=False,
-    )
-    if proc.returncode != 0:
-        return []
-    return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+def latest_commit(timeout: int | float = 10) -> str:
+    text = _fetch(REFS_URL, timeout, 1 << 20).decode('utf-8', 'replace')
+    found = re.search(rf'([0-9a-f]{{40}}) refs/heads/{re.escape(BRANCH)}\n', text)
+    if not found:
+        raise UpdateError(f'Không tìm thấy nhánh {BRANCH} trên GitHub.')
+    return found.group(1)
 
 
-def _ref_exists(repo_dir: Path, ref: str) -> bool:
-    proc = _run_git(repo_dir, 'rev-parse', '--verify', '--quiet', f'{ref}^{{commit}}', check=False)
-    return proc.returncode == 0
-
-
-def _resolve_target_branch(
-    repo_dir: Path,
-    remote: str = 'origin',
-    branch: str | None = None,
-    current_info: dict[str, Any] | None = None,
-    state_data: dict[str, Any] | None = None,
-) -> str:
-    if branch:
-        cleaned = branch.strip()
-        if cleaned.startswith(f'{remote}/'):
-            cleaned = cleaned[len(remote) + 1 :]
-        if cleaned and cleaned != 'HEAD':
-            return cleaned
-
-    if current_info and not current_info.get('detached') and current_info.get('branch') not in (None, '', 'HEAD'):
-        return str(current_info['branch'])
-
-    if state_data:
-        for key in ('target_branch', 'previous_branch'):
-            candidate = state_data.get(key)
-            if isinstance(candidate, str) and candidate.strip() and candidate.strip() != 'HEAD':
-                return candidate.strip()
-
-    for candidate in ('dev', 'main', 'master'):
-        if _ref_exists(repo_dir, f'refs/remotes/{remote}/{candidate}') or _ref_exists(repo_dir, f'refs/heads/{candidate}'):
-            return candidate
-    return 'dev'
-
-
-def get_current_version_info(repo_dir: Path | str, state_dir: Path | str | None = None) -> dict[str, Any]:
-    repo, state_path = _resolve_repo_and_state(repo_dir, state_dir)
-    commit = _run_git(repo, 'rev-parse', 'HEAD').stdout.strip()
-    short_commit = commit[:7]
-
-    sym_proc = _run_git(repo, 'symbolic-ref', '--quiet', '--short', 'HEAD', check=False)
-    if sym_proc.returncode == 0 and sym_proc.stdout.strip():
-        branch = sym_proc.stdout.strip()
-        detached = False
-    else:
-        branch = 'HEAD'
-        detached = True
-
-    tags = _tags_at_commit(repo, 'HEAD')
-    tag = tags[0] if tags else None
-
-    log_proc = _run_git(repo, 'log', '-1', '--format=%s%x1f%cI', 'HEAD', check=False)
-    subject = ''
-    committed_at = ''
-    if log_proc.returncode == 0 and log_proc.stdout.strip():
-        parts = log_proc.stdout.strip().split('\x1f')
-        subject = parts[0] if len(parts) > 0 else ''
-        committed_at = parts[1] if len(parts) > 1 else ''
-
-    dirty_files = _get_dirty_files(repo)
-    state_data = _read_updater_state(state_path)
-    previous_commit = state_data.get('previous_commit')
-    if not isinstance(previous_commit, str) or not previous_commit.strip():
-        previous_commit = None
-
-    remote_proc = _run_git(repo, 'remote', 'get-url', 'origin', check=False)
-    remote_url = remote_proc.stdout.strip() if remote_proc.returncode == 0 else ''
-
+def current_version(state_dir: Path | str) -> dict[str, Any]:
+    state_dir = Path(state_dir)
+    state = _read_updater_state(state_dir)
+    commit = state.get('commit')
+    commit = commit if isinstance(commit, str) and SHA_RE.match(commit) else None
     return {
         'commit': commit,
-        'short_commit': short_commit,
-        'branch': branch,
-        'detached': detached,
-        'tag': tag,
-        'tags': tags,
-        'subject': subject,
-        'committed_at': committed_at,
-        'dirty': bool(dirty_files),
-        'dirty_files': dirty_files,
-        'previous_commit': previous_commit,
-        'can_rollback': bool(previous_commit and previous_commit != commit),
-        'remote_url': remote_url,
+        'short_commit': commit[:7] if commit else '',
+        'installed_at': state.get('installed_at'),
+        'can_rollback': (state_dir / BACKUP_DIRNAME / 'manifest.json').is_file(),
     }
 
 
-def _parse_log_entries(repo_dir: Path, rev_args: list[str]) -> list[dict[str, Any]]:
-    proc = _run_git(
-        repo_dir,
-        'log',
-        *rev_args,
-        '--format=%H%x1f%h%x1f%s%x1f%cI%x1f%an',
-        check=False,
-    )
-    if proc.returncode != 0 or not proc.stdout.strip():
-        return []
-    entries: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for line in proc.stdout.splitlines():
-        if not line.strip():
-            continue
-        parts = line.split('\x1f')
-        if len(parts) < 5:
-            continue
-        sha, short_sha, subject, committed_at, author = parts[:5]
-        if sha in seen:
-            continue
-        seen.add(sha)
-        entries.append(
-            {
-                'commit': sha,
-                'short_commit': short_sha or sha[:7],
-                'subject': subject,
-                'committed_at': committed_at,
-                'author': author,
-                'tags': _tags_at_commit(repo_dir, sha),
-            }
-        )
-    return entries
-
-
-def check_for_updates(
-    repo_dir: Path | str,
-    remote: str = 'origin',
-    branch: str | None = None,
-    state_dir: Path | str | None = None,
-    fetch: bool = True,
-    timeout: int = 15,
-) -> dict[str, Any]:
-    repo, state_path = _resolve_repo_and_state(repo_dir, state_dir)
-    current = get_current_version_info(repo, state_dir=state_path)
-    state_data = _read_updater_state(state_path)
-    target_branch = _resolve_target_branch(repo, remote=remote, branch=branch, current_info=current, state_data=state_data)
-
-    offline = False
-    fetch_error: str | None = None
-    if fetch:
-        try:
-            fetch_proc = _run_git(repo, 'fetch', '--tags', '--prune', remote, check=False, timeout=timeout)
-            if fetch_proc.returncode != 0:
-                offline = True
-                fetch_error = (fetch_proc.stderr or fetch_proc.stdout or 'git fetch failed').strip()
-        except (subprocess.TimeoutExpired, OSError) as exc:
-            offline = True
-            fetch_error = str(exc)
-
-    current = get_current_version_info(repo, state_dir=state_path)
-    target_branch = _resolve_target_branch(repo, remote=remote, branch=branch, current_info=current, state_data=state_data)
-
-    remote_ref = f'{remote}/{target_branch}'
-    remote_commit = ''
-    remote_short_commit = ''
-    ahead = 0
-    behind = 0
-    incoming_commits: list[dict[str, Any]] = []
-
-    if _ref_exists(repo, f'refs/remotes/{remote_ref}') or _ref_exists(repo, remote_ref):
-        remote_commit = _run_git(repo, 'rev-parse', f'{remote_ref}^{{commit}}').stdout.strip()
-        remote_short_commit = remote_commit[:7]
-        counts_proc = _run_git(
-            repo,
-            'rev-list',
-            '--left-right',
-            '--count',
-            f'HEAD...{remote_ref}',
-            check=False,
-        )
-        if counts_proc.returncode == 0 and counts_proc.stdout.strip():
-            parts = counts_proc.stdout.strip().split()
-            if len(parts) == 2:
-                ahead = int(parts[0])
-                behind = int(parts[1])
-        if behind > 0:
-            incoming_commits = _parse_log_entries(repo, [f'HEAD..{remote_ref}'])
-
-    update_available = behind > 0
-    if behind > 0 and ahead > 0:
-        status = 'diverged'
-    elif behind > 0:
-        status = 'behind'
-    elif ahead > 0:
-        status = 'ahead'
-    elif current['detached']:
-        status = 'detached'
-    elif offline and not remote_commit:
-        status = 'offline'
-    else:
-        status = 'up_to_date'
-
+def check_for_updates(state_dir: Path | str, timeout: int | float = 10) -> dict[str, Any]:
+    current = current_version(state_dir)
+    latest = latest_commit(timeout)
     return {
         'current': current,
-        'target_branch': target_branch,
-        'remote_commit': remote_commit,
-        'remote_short_commit': remote_short_commit,
-        'ahead': ahead,
-        'behind': behind,
-        'update_available': update_available,
-        'status': status,
-        'offline': offline,
-        'fetch_error': fetch_error,
-        'incoming_commits': incoming_commits,
-    }
-
-
-def list_versions(
-    repo_dir: Path | str,
-    remote: str = 'origin',
-    branch: str | None = None,
-    limit: int = 30,
-    state_dir: Path | str | None = None,
-) -> dict[str, Any]:
-    repo, state_path = _resolve_repo_and_state(repo_dir, state_dir)
-    current = get_current_version_info(repo, state_dir=state_path)
-    state_data = _read_updater_state(state_path)
-    target_branch = _resolve_target_branch(repo, remote=remote, branch=branch, current_info=current, state_data=state_data)
-
-    current_commit = current['commit']
-    previous_commit = current['previous_commit']
-
-    remote_ref = f'{remote}/{target_branch}'
-    remote_head = ''
-    if _ref_exists(repo, f'refs/remotes/{remote_ref}') or _ref_exists(repo, remote_ref):
-        remote_head = _run_git(repo, 'rev-parse', f'{remote_ref}^{{commit}}').stdout.strip()
-
-    tags_list: list[dict[str, Any]] = []
-    tag_proc = _run_git(repo, 'tag', '--sort=-creatordate', check=False)
-    if tag_proc.returncode == 0:
-        for raw_tag in tag_proc.stdout.splitlines():
-            tag_name = raw_tag.strip()
-            if not tag_name:
-                continue
-            sha_proc = _run_git(repo, 'rev-list', '-n', '1', tag_name, check=False)
-            if sha_proc.returncode != 0 or not sha_proc.stdout.strip():
-                continue
-            tag_sha = sha_proc.stdout.strip()
-            meta_proc = _run_git(repo, 'log', '-1', '--format=%s%x1f%cI', tag_sha, check=False)
-            subject = ''
-            committed_at = ''
-            if meta_proc.returncode == 0 and meta_proc.stdout.strip():
-                parts = meta_proc.stdout.strip().split('\x1f')
-                subject = parts[0] if len(parts) > 0 else ''
-                committed_at = parts[1] if len(parts) > 1 else ''
-            tags_list.append(
-                {
-                    'name': tag_name,
-                    'commit': tag_sha,
-                    'short_commit': tag_sha[:7],
-                    'subject': subject,
-                    'committed_at': committed_at,
-                    'is_current': tag_sha == current_commit,
-                    'is_previous': bool(previous_commit and tag_sha == previous_commit),
-                }
-            )
-
-    log_refs: list[str] = []
-    if remote_head:
-        log_refs.append(remote_ref)
-    if _ref_exists(repo, f'refs/heads/{target_branch}'):
-        log_refs.append(target_branch)
-    log_refs.append('HEAD')
-    log_refs.append('--tags')
-
-    raw_commits = _parse_log_entries(repo, [f'-n{max(1, int(limit))}', '--date-order', *log_refs])
-    commits_list: list[dict[str, Any]] = []
-    for item in raw_commits:
-        sha = item['commit']
-        commits_list.append(
-            {
-                **item,
-                'is_current': sha == current_commit,
-                'is_previous': bool(previous_commit and sha == previous_commit),
-                'is_remote_head': bool(remote_head and sha == remote_head),
-            }
-        )
-
-    return {
-        'current_commit': current_commit,
-        'previous_commit': previous_commit,
-        'target_branch': target_branch,
-        'tags': tags_list,
-        'commits': commits_list,
+        'latest_commit': latest,
+        'latest_short_commit': latest[:7],
+        'update_available': current['commit'] != latest,
     }
 
 
@@ -485,185 +195,121 @@ def _run_smoke_test(repo_dir: Path, smoke_modules: tuple[str, ...] | None = None
             raise RuntimeError(f'Smoke-test import thất bại ({import_stmt}): {err}')
 
 
-def _restore_previous_git_state(
-    repo_dir: Path,
-    old_commit: str,
-    old_branch: str,
-    old_detached: bool,
-    stashed: bool,
-) -> None:
-    if not old_detached and old_branch and old_branch != 'HEAD':
-        _run_git(repo_dir, 'checkout', '-f', '-B', old_branch, old_commit, check=False)
-    else:
-        _run_git(repo_dir, 'checkout', '-f', '--detach', old_commit, check=False)
-    if stashed:
-        _run_git(repo_dir, 'stash', 'pop', check=False)
+MAX_ZIP_BYTES = 64 << 20
+MAX_UNPACKED_BYTES = 256 << 20
 
 
-def switch_version(
+def _is_protected(rel: str) -> bool:
+    """Paths the updater must never write: patient data, the venv, and the launcher that is running right now."""
+    low = rel.lower()  # Windows paths ignore case and trailing dots/spaces, so compare in that normal form
+    top = low.split('/', 1)[0].rstrip('. ')
+    return low == 'mo_cong_cu.bat' or top.startswith(('hmu_jobs', 'ket_qua_test')) or top in ('.venv', '.git', '.superpowers')
+
+
+def _read_release(data: bytes) -> tuple[str, dict[str, bytes]]:
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile as exc:
+        raise UpdateError('Gói cập nhật tải về bị lỗi. Hãy thử lại.') from exc
+    sha = archive.comment.decode('ascii', 'ignore')
+    if not SHA_RE.match(sha):
+        raise UpdateError('Không xác minh được gói cập nhật (thiếu mã commit). Đã hủy.')
+    if sum(i.file_size for i in archive.infolist()) > MAX_UNPACKED_BYTES:
+        raise UpdateError('Gói cập nhật lớn bất thường. Đã hủy để đảm bảo an toàn.')
+    files: dict[str, bytes] = {}
+    for info in archive.infolist():
+        name = info.filename.replace('\\', '/')
+        parts = name.split('/')
+        if name.startswith('/') or ':' in name or '..' in parts:  # ':' = drive letter or NTFS stream
+            raise UpdateError('Gói cập nhật không hợp lệ (đường dẫn nguy hiểm). Đã hủy.')
+        rel = '/'.join(parts[1:])  # parts[0] is the GitHub root folder
+        if info.is_dir() or not rel or _is_protected(rel):
+            continue
+        files[rel] = archive.read(info)
+    return sha, files
+
+
+def _write_atomic(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + '.tmp')
+    tmp.write_bytes(data)
+    os.replace(tmp, path)
+
+
+def _restore(repo: Path, backup_dir: Path) -> dict[str, Any]:
+    manifest = json.loads((backup_dir / 'manifest.json').read_text(encoding='utf-8'))
+    for rel in manifest['replaced']:
+        _write_atomic(repo / rel, (backup_dir / 'files' / rel).read_bytes())
+    for rel in manifest['added']:
+        (repo / rel).unlink(missing_ok=True)
+    return manifest
+
+
+def apply_update(
     repo_dir: Path | str,
-    target: str,
-    remote: str = 'origin',
-    branch: str | None = None,
-    state_dir: Path | str | None = None,
+    state_dir: Path | str,
+    run_pip: bool = True,
+    run_smoke_test: bool = True,
+    smoke_modules: tuple[str, ...] | None = ('app',),
+    timeout: int | float = 20,
+) -> dict[str, Any]:
+    repo, state_dir = Path(repo_dir), Path(state_dir)
+    sha, files = _read_release(_fetch(ZIP_URL, timeout, MAX_ZIP_BYTES))
+    old = current_version(state_dir)['commit']
+    if sha == old:
+        return {'status': 'noop', 'from_commit': old, 'to_commit': sha, 'pip_installed': False, 'changed_files': 0}
+
+    changed = {rel: data for rel, data in files.items() if not (repo / rel).is_file() or (repo / rel).read_bytes() != data}
+    backup_new = state_dir / (BACKUP_DIRNAME + '.new')
+    shutil.rmtree(backup_new, ignore_errors=True)
+    replaced = [rel for rel in changed if (repo / rel).is_file()]
+    for rel in replaced:
+        (backup_new / 'files' / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(repo / rel, backup_new / 'files' / rel)
+    manifest = {'from_commit': old, 'to_commit': sha, 'replaced': replaced, 'added': [rel for rel in changed if rel not in replaced]}
+    backup_new.mkdir(parents=True, exist_ok=True)
+    (backup_new / 'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False), encoding='utf-8')
+
+    pip_installed = False
+    try:
+        for rel, data in changed.items():
+            _write_atomic(repo / rel, data)
+        if run_pip and 'requirements.txt' in changed:
+            _install_requirements(repo)  # shortcut: newly installed packages are not uninstalled on restore, harmless
+            pip_installed = True
+        if run_smoke_test:
+            _run_smoke_test(repo, smoke_modules)
+    except Exception as exc:
+        _restore(repo, backup_new)
+        shutil.rmtree(backup_new, ignore_errors=True)
+        raise UpdateError(f'Cập nhật thất bại, đã khôi phục bản cũ: {exc}') from exc
+    # shortcut: files deleted on dev stay on disk (harmless); upgrade if a stale module ever breaks an import
+
+    shutil.rmtree(state_dir / BACKUP_DIRNAME, ignore_errors=True)
+    os.replace(backup_new, state_dir / BACKUP_DIRNAME)
+    _write_updater_state(state_dir, {'commit': sha, 'previous_commit': old, 'installed_at': datetime.now(timezone.utc).isoformat()})
+    return {'status': 'updated', 'from_commit': old, 'to_commit': sha, 'pip_installed': pip_installed, 'changed_files': len(changed)}
+
+
+def rollback(
+    repo_dir: Path | str,
+    state_dir: Path | str,
     run_pip: bool = True,
     run_smoke_test: bool = True,
     smoke_modules: tuple[str, ...] | None = ('app',),
 ) -> dict[str, Any]:
-    repo, state_path = _resolve_repo_and_state(repo_dir, state_dir)
-    old_info = get_current_version_info(repo, state_dir=state_path)
-    old_commit = old_info['commit']
-    old_branch = old_info['branch']
-    old_detached = old_info['detached']
-    old_req_hash = _file_sha256(repo / 'requirements.txt')
-
-    state_data = _read_updater_state(state_path)
-    target_branch = _resolve_target_branch(
-        repo,
-        remote=remote,
-        branch=branch,
-        current_info=old_info,
-        state_data=state_data,
-    )
-
-    # Step 1: Auto-stash dirty files outside HMU_JOBS/ and .venv/
-    dirty_files = _get_dirty_files(repo)
-    stashed = False
-    stash_ref: str | None = None
-    if dirty_files:
-        ts = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-        stash_msg = f'hmu-auto-backup-{ts}'
-        stash_proc = _run_git(
-            repo,
-            'stash',
-            'push',
-            '--include-untracked',
-            '-m',
-            stash_msg,
-            '--',
-            '.',
-            ':(exclude)HMU_JOBS',
-            ':(exclude).venv',
-            check=False,
-        )
-        if stash_proc.returncode == 0 and 'No local changes to save' not in (stash_proc.stdout or ''):
-            stashed = True
-            ref_proc = _run_git(repo, 'rev-parse', '--verify', '--quiet', 'refs/stash', check=False)
-            stash_ref = ref_proc.stdout.strip() if ref_proc.returncode == 0 and ref_proc.stdout.strip() else 'stash@{0}'
-
-    # Step 2: Resolve target and checkout (exiting Detached HEAD when switching to 'latest' or branch)
-    target_str = (target or 'latest').strip()
-    is_branch_target = (
-        target_str == 'latest'
-        or target_str == target_branch
-        or target_str == f'{remote}/{target_branch}'
-        or target_str in ('dev', 'main', 'master')
-        and (
-            _ref_exists(repo, f'refs/remotes/{remote}/{target_str}')
-            or _ref_exists(repo, f'refs/heads/{target_str}')
-        )
-    )
-
-    if is_branch_target:
-        checkout_branch = (
-            target_branch
-            if target_str in ('latest', f'{remote}/{target_branch}')
-            else target_str.removeprefix(f'{remote}/')
-        )
-        _run_git(repo, 'fetch', '--tags', '--prune', remote, check=False, timeout=15)
-        remote_branch_ref = f'{remote}/{checkout_branch}'
-        if _ref_exists(repo, f'refs/remotes/{remote_branch_ref}') or _ref_exists(repo, remote_branch_ref):
-            _run_git(repo, 'checkout', '-f', '-B', checkout_branch, remote_branch_ref)
-        elif _ref_exists(repo, f'refs/heads/{checkout_branch}'):
-            _run_git(repo, 'checkout', '-f', '-B', checkout_branch, f'refs/heads/{checkout_branch}')
-        else:
-            _restore_previous_git_state(repo, old_commit, old_branch, old_detached, stashed)
-            raise ValueError(f'Không tìm thấy nhánh cập nhật: {checkout_branch}')
-    else:
-        if not _ref_exists(repo, target_str):
-            _run_git(repo, 'fetch', '--tags', '--prune', remote, check=False, timeout=15)
-        sha_proc = _run_git(repo, 'rev-parse', '--verify', '--quiet', f'{target_str}^{{commit}}', check=False)
-        if sha_proc.returncode != 0 or not sha_proc.stdout.strip():
-            _restore_previous_git_state(repo, old_commit, old_branch, old_detached, stashed)
-            raise ValueError(f'Không tìm thấy phiên bản hoặc mã commit: {target_str}')
-        resolved_sha = sha_proc.stdout.strip()
-        _run_git(repo, 'checkout', '-f', '--detach', resolved_sha)
-
-    # Step 3: Sync requirements.txt if changed and run smoke-test; auto-revert on failure
-    new_req_hash = _file_sha256(repo / 'requirements.txt')
-    pip_installed = False
+    repo, state_dir = Path(repo_dir), Path(state_dir)
+    backup = state_dir / BACKUP_DIRNAME
+    if not (backup / 'manifest.json').is_file():
+        raise UpdateError('Không có bản trước để quay lại.')
+    manifest = _restore(repo, backup)
     try:
-        if run_pip and new_req_hash is not None and new_req_hash != old_req_hash:
+        if run_pip and 'requirements.txt' in manifest['replaced']:
             _install_requirements(repo)
-            pip_installed = True
         if run_smoke_test:
-            _run_smoke_test(repo, smoke_modules=smoke_modules)
+            _run_smoke_test(repo, smoke_modules)
     except Exception as exc:
-        _restore_previous_git_state(repo, old_commit, old_branch, old_detached, stashed)
-        raise RuntimeError(
-            f'Kiểm tra an toàn phiên bản thất bại, đã tự động khôi phục về {old_commit[:7]}: {exc}'
-        ) from exc
-
-    # Step 4: Persist rollback state in HMU_JOBS/updater_state.json
-    new_commit = _run_git(repo, 'rev-parse', 'HEAD').stdout.strip()
-    new_sym = _run_git(repo, 'symbolic-ref', '--quiet', '--short', 'HEAD', check=False)
-    new_detached = not (new_sym.returncode == 0 and new_sym.stdout.strip())
-
-    changed = (new_commit != old_commit) or (new_detached != old_detached)
-    status = 'switched' if changed else 'noop'
-
-    now_iso = datetime.now(timezone.utc).isoformat()
-    history = list(state_data.get('history') or []) if isinstance(state_data.get('history'), list) else []
-    prev_to_save = old_commit if new_commit != old_commit else (state_data.get('previous_commit') or old_commit)
-    history.append(
-        {
-            'from_commit': old_commit,
-            'to_commit': new_commit,
-            'target': target_str,
-            'stashed': stashed,
-            'stash_ref': stash_ref,
-            'pip_installed': pip_installed,
-            'timestamp': now_iso,
-        }
-    )
-    updated_state = {
-        **state_data,
-        'previous_commit': prev_to_save,
-        'previous_branch': old_branch if not old_detached else state_data.get('previous_branch', target_branch),
-        'target_branch': target_branch,
-        'current_commit': new_commit,
-        'last_switched_at': now_iso,
-        'last_stash_ref': stash_ref,
-        'history': history[-50:],
-    }
-    _write_updater_state(state_path, updated_state)
-
-    current = get_current_version_info(repo, state_dir=state_path)
-    return {
-        'status': status,
-        'from_commit': old_commit,
-        'to_commit': new_commit,
-        'target': target_str,
-        'detached': current['detached'],
-        'stashed': stashed,
-        'stash_ref': stash_ref,
-        'pip_installed': pip_installed,
-        'current': current,
-    }
-
-
-def rollback_previous(
-    repo_dir: Path | str,
-    state_dir: Path | str | None = None,
-    **kwargs: Any,
-) -> dict[str, Any]:
-    repo, state_path = _resolve_repo_and_state(repo_dir, state_dir)
-    state_data = _read_updater_state(state_path)
-    prev_commit = state_data.get('previous_commit')
-    if not isinstance(prev_commit, str) or not prev_commit.strip():
-        reflog_proc = _run_git(repo, 'rev-parse', '--verify', '--quiet', 'HEAD@{1}^{commit}', check=False)
-        if reflog_proc.returncode == 0 and reflog_proc.stdout.strip():
-            prev_commit = reflog_proc.stdout.strip()
-        else:
-            raise ValueError('Không tìm thấy phiên bản trước đó để quay lại (rollback).')
-    return switch_version(repo, target=prev_commit.strip(), state_dir=state_path, **kwargs)
+        raise UpdateError(f'Quay lại bản trước thất bại: {exc}') from exc
+    shutil.rmtree(backup, ignore_errors=True)
+    _write_updater_state(state_dir, {'commit': manifest['from_commit'], 'installed_at': datetime.now(timezone.utc).isoformat()})
+    return {'status': 'rolled_back', 'to_commit': manifest['from_commit']}

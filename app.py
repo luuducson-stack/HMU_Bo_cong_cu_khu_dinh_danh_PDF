@@ -545,14 +545,7 @@ def create_server(root: Path, active: Path | None = None, port: int = 0, repo_di
                                 if not 1<=pn<=len(doc):raise ValueError('Invalid page')
                                 self.send(200,doc[pn-1].get_pixmap(dpi=120,alpha=False).tobytes('png'),'image/png');return
                     if path == '/update/status':
-                        repo = getattr(self.server, 'repo_dir', Path(__file__).resolve().parent)
-                        try:
-                            current_info = updater.get_current_version_info(repo, state_dir=root)
-                        except (subprocess.CalledProcessError, FileNotFoundError):
-                            # Folder copied by USB/zip (no .git) or git not installed: normal state, not an application error.
-                            self.send(200, {'git_available': False, 'current': None, 'versions': None}); return
-                        versions_info = updater.list_versions(repo, state_dir=root)
-                        self.send(200, {'git_available': True, 'current': current_info, 'versions': versions_info}); return
+                        self.send(200, {'current': updater.current_version(root)}); return
                     if not active: self.send(404, {'error':'No active job'}); return
                     d = read_review(active)
                     if q.get('job_id', [''])[0] != d['job_id']: raise Conflict('Job changed; reload state')
@@ -649,14 +642,14 @@ def create_server(root: Path, active: Path | None = None, port: int = 0, repo_di
                         if path=='/batch/open_job' and progress['status']=='running':raise Conflict('Đợi thao tác hiện tại hoàn tất trước khi chuyển file')
                         self.send(200,batch_post(path,json.loads(body)));return
                     if path == '/update/check':
-                        req = json.loads(body) if body else {}
-                        repo = getattr(self.server, 'repo_dir', Path(__file__).resolve().parent)
-                        remote = req.get('remote', 'origin')
-                        branch = req.get('branch')
-                        fetch = bool(req.get('fetch', True))
-                        check_res = updater.check_for_updates(repo, remote=remote, branch=branch, state_dir=root, fetch=fetch)
-                        versions_res = updater.list_versions(repo, remote=remote, branch=branch, state_dir=root)
-                        self.send(200, {'check': check_res, 'versions': versions_res}); return
+                        lock.release()  # network call: do not stall other requests while GitHub is slow or offline
+                        try:
+                            check_res = updater.check_for_updates(root)
+                        except updater.UpdateError as exc:
+                            self.send(400, {'error': str(exc)}); return
+                        finally:
+                            lock.acquire()
+                        self.send(200, check_res); return
                     if path in {'/update/apply', '/update/rollback'}:
                         coord = batch_status().get('coordinator', {})
                         if progress['status'] == 'running' or coord.get('active', 0) > 0:
@@ -664,34 +657,12 @@ def create_server(root: Path, active: Path | None = None, port: int = 0, repo_di
                         save_session()
                         req = json.loads(body) if body else {}
                         repo = getattr(self.server, 'repo_dir', Path(__file__).resolve().parent)
-                        restart = bool(req.get('restart', True))
-                        run_pip = bool(req.get('run_pip', True))
-                        run_smoke_test = bool(req.get('run_smoke_test', True))
-                        remote = req.get('remote', 'origin')
-                        branch = req.get('branch')
-                        smoke_modules = req.get('smoke_modules', ('app',))
-                        if path == '/update/apply':
-                            target = req.get('target', 'latest')
-                            res = updater.switch_version(
-                                repo,
-                                target=target,
-                                remote=remote,
-                                branch=branch,
-                                state_dir=root,
-                                run_pip=run_pip,
-                                run_smoke_test=run_smoke_test,
-                                smoke_modules=tuple(smoke_modules) if smoke_modules else None,
-                            )
-                        else:
-                            res = updater.rollback_previous(
-                                repo,
-                                remote=remote,
-                                branch=branch,
-                                state_dir=root,
-                                run_pip=run_pip,
-                                run_smoke_test=run_smoke_test,
-                                smoke_modules=tuple(smoke_modules) if smoke_modules else None,
-                            )
+                        opts = dict(run_pip=bool(req.get('run_pip', True)), run_smoke_test=bool(req.get('run_smoke_test', True)))
+                        try:
+                            res = updater.apply_update(repo, root, **opts) if path == '/update/apply' else updater.rollback(repo, root, **opts)
+                        except updater.UpdateError as exc:
+                            self.send(400, {'error': str(exc)}); return
+                        restart = bool(req.get('restart', True)) and res['status'] != 'noop'
                         if restart:
                             self.server.restart_requested = True
                             threading.Timer(0.25, self.server.shutdown).start()

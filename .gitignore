@@ -1,5 +1,7 @@
 # Patient data (PHI), job runs, review outputs — never commit
 HMU_JOBS/
+HMU_JOBS*/
+KET_QUA_TEST*/
 *.pdf
 *.png
 *.jpg

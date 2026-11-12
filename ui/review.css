@@ -128,14 +128,6 @@ button.kbd-active, .ergo-key.kbd-active {
   cursor: pointer; min-height: 34px;
 }
 .update-btn:hover:not(:disabled) { background: rgba(255, 255, 255, .25); filter: none; }
-.update-dot {
-  display: inline-block; width: 9px; height: 9px; border-radius: 50%;
-  background: #ff4d4f; box-shadow: 0 0 6px #ff4d4f; animation: pulseDot 1.8s infinite;
-}
-@keyframes pulseDot {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: .5; transform: scale(1.2); }
-}
 .update-overlay {
   position: fixed; inset: 0; z-index: 130;
   background: rgba(21, 38, 57, .65);
@@ -162,8 +154,6 @@ button.kbd-active, .ergo-key.kbd-active {
 .update-status-block.has-update { background: #e6f7ff; border-color: #91d5ff; color: #0050b3; }
 .update-status-block.up-to-date { background: #f6ffed; border-color: #b7eb8f; color: #237804; }
 .update-quick-actions { margin-top: 12px; }
-.update-version-select-block { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--line); }
-.update-version-select-block label { display: block; margin-bottom: 6px; }
 .update-restart-notice {
   margin-top: 12px; padding: 12px; border-radius: 8px;
   background: #e6f4ff; border: 1px solid #1677ff; color: #0958d9;

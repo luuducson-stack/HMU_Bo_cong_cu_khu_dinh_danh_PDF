@@ -1090,38 +1090,23 @@ function escapeHtml(str) {
 }
 
 function formatVersionBadge(current) {
- if (!current) return '...';
- const tagPart = current.tag ? current.tag + ' · ' : '';
- const commitPart = current.short_commit || 'unknown';
- const branchPart = ' (' + (current.branch || 'detached') + ')';
- const dirtyPart = current.dirty ? ' *' : '';
- return tagPart + commitPart + branchPart + dirtyPart;
+ return current && current.short_commit ? current.short_commit : 'chưa xác định';
 }
 
 function renderUpdateCurrentInfo(current) {
  const box = $('updateCurrentInfo');
  if (!box) return;
- if (!current) {
-  box.textContent = 'Chưa có thông tin phiên bản';
-  return;
- }
- const tagDisplay = current.tag ? `<b>${escapeHtml(current.tag)}</b> · ` : '';
- const dirtyDisplay = current.dirty ? ' · <span style="color:#cf1322;font-weight:600">Có thay đổi cục bộ</span>' : '';
-
  box.replaceChildren();
  const row1 = document.createElement('div');
- row1.innerHTML = `<strong>Phiên bản hiện tại:</strong> ${tagDisplay}<code>${escapeHtml(current.short_commit || '')}</code> (${escapeHtml(current.branch || 'Detached HEAD')})${dirtyDisplay}`;
- const row2 = document.createElement('div');
- row2.className = 'muted small';
- if (row2.style) row2.style.marginTop = '4px';
- row2.textContent = `Commit: ${current.subject || ''} (${current.committed_at || ''})`;
- box.append(row1, row2);
- if (current.previous_commit) {
-  const row3 = document.createElement('div');
-  row3.className = 'muted small';
-  if (row3.style) row3.style.marginTop = '4px';
-  row3.innerHTML = `Bản trước đó (có thể Rollback): <code>${escapeHtml(current.previous_commit.slice(0, 7))}</code>`;
-  box.append(row3);
+ row1.innerHTML = current && current.short_commit
+  ? `<strong>Phiên bản hiện tại:</strong> <code>${escapeHtml(current.short_commit)}</code>`
+  : '<strong>Phiên bản hiện tại:</strong> chưa xác định <span class="muted small">(chưa từng cập nhật bằng công cụ này)</span>';
+ box.append(row1);
+ if (current && current.installed_at) {
+  const row2 = document.createElement('div');
+  row2.className = 'muted small';
+  row2.textContent = `Cập nhật lúc: ${current.installed_at}`;
+  box.append(row2);
  }
 }
 
@@ -1130,80 +1115,22 @@ function renderComparisonStatus(check) {
  if (!box) return;
  box.className = 'update-status-block';
  if (!check) {
-  box.textContent = 'Chưa kiểm tra với Git. Bấm "Kiểm tra trên Git" để làm mới.';
+  box.textContent = 'Bấm "Kiểm tra & cập nhật" để so với bản mới nhất trên GitHub.';
   return;
  }
- if (check.offline) {
-  box.textContent = '⚠️ Mất kết nối Git remote (ngoại tuyến). Bạn vẫn có thể rollback về các bản có sẵn cục bộ.';
-  return;
- }
- if (check.update_available || check.behind > 0) {
+ if (check.update_available) {
   box.classList.add('has-update');
-  box.textContent = `⭐ Có ${check.behind} bản cập nhật mới trên Git remote! Bấm "Cập nhật bản mới nhất" để nâng cấp.`;
+  box.textContent = `⭐ Có bản mới ${check.latest_short_commit} trên nhánh dev.`;
   return;
  }
- if (check.status === 'up_to_date') {
-  box.classList.add('up-to-date');
-  box.textContent = '✅ Đã ở bản mới nhất trên Git remote.';
-  return;
- }
- if (check.status === 'ahead') {
-  box.textContent = `Đang đi trước Git remote ${check.ahead} commit.`;
-  return;
- }
- if (check.status === 'detached') {
-  box.textContent = '⚠️ Đang ở phiên bản cũ (Detached HEAD). Bấm "Cập nhật bản mới nhất" để quay về nhánh chính.';
-  return;
- }
- if (check.status === 'diverged') {
-  box.textContent = `⚠️ Nhánh cục bộ và remote bị phân nhánh (ahead ${check.ahead}, behind ${check.behind}).`;
-  return;
- }
- box.textContent = `Trạng thái Git: ${check.status || 'OK'}`;
+ box.classList.add('up-to-date');
+ box.textContent = '✅ Bạn đang dùng bản mới nhất.';
 }
 
-function renderVersionSelect(versions, currentCommit) {
- const select = $('versionSelect');
- if (!select) return;
- select.replaceChildren();
-
- const tags = versions?.tags || [];
- const commits = versions?.commits || [];
-
- if (!tags.length && !commits.length) {
-  const opt = document.createElement('option');
-  opt.value = '';
-  opt.textContent = '-- Không tìm thấy phiên bản nào --';
-  select.append(opt);
-  return;
- }
-
- if (tags.length) {
-  const tagGroup = document.createElement('optgroup');
-  tagGroup.setAttribute('label', 'Tags phát hành');
-  tags.forEach(t => {
-   const opt = document.createElement('option');
-   opt.value = t.name;
-   const cur = t.is_current || (currentCommit && t.commit === currentCommit) ? ' [Hiện tại]' : '';
-   opt.textContent = `${t.name} - ${t.subject || ''} (${t.short_commit})${cur}`;
-   tagGroup.append(opt);
-  });
-  select.append(tagGroup);
- }
-
- if (commits.length) {
-  const commitGroup = document.createElement('optgroup');
-  commitGroup.setAttribute('label', 'Lịch sử Commit');
-  commits.forEach(c => {
-   const opt = document.createElement('option');
-   opt.value = c.commit;
-   const cur = c.is_current || (currentCommit && c.commit === currentCommit) ? ' [Hiện tại]' : (c.is_previous ? ' [Trước đó]' : '');
-   const remote = c.is_remote_head ? ' [Remote Head]' : '';
-   opt.textContent = `${c.short_commit} - ${c.subject || ''} (${c.date || ''})${cur}${remote}`;
-   commitGroup.append(opt);
-  });
-  select.append(commitGroup);
- }
+function showCurrentVersion(current) {
+ if ($('versionBadge')) $('versionBadge').textContent = 'Phiên bản: ' + formatVersionBadge(current);
+ if ($('btnRollbackPrev')) $('btnRollbackPrev').disabled = !(current && current.can_rollback);
+ renderUpdateCurrentInfo(current);
 }
 
 async function loadUpdateStatus() {
@@ -1211,75 +1138,11 @@ async function loadUpdateStatus() {
   const res = await fetch('/update/status');
   if (!res.ok) return;
   const data = await res.json();
-  if (data && data.git_available === false) {
-   if ($('versionBadge')) $('versionBadge').textContent = 'Phiên bản: bản sao thủ công (không có Git, không tự cập nhật)';
-   return;
-  }
   if (!data || !data.current) return;
   updateStatusCache = data;
-  const current = data.current;
-  if ($('versionBadge')) {
-   $('versionBadge').textContent = 'Phiên bản: ' + formatVersionBadge(current);
-  }
-  if ($('btnRollbackPrev')) {
-   $('btnRollbackPrev').disabled = !current.can_rollback;
-  }
-  renderUpdateCurrentInfo(current);
-  if (data.versions) {
-   renderVersionSelect(data.versions, current.commit);
-  }
-  if ($('updateComparisonStatus') && !$('updateComparisonStatus').textContent) {
-   renderComparisonStatus(null);
-  }
+  showCurrentVersion(data.current);
+  if ($('updateComparisonStatus') && !$('updateComparisonStatus').textContent) renderComparisonStatus(null);
  } catch (_) {}
-}
-
-async function checkGitUpdates() {
- const btn = $('btnCheckUpdate');
- const oldText = btn ? btn.textContent : '';
- if (btn) { btn.disabled = true; btn.textContent = 'Đang kiểm tra Git…'; }
- try {
-  const res = await fetch('/update/check', {
-   method: 'POST',
-   headers: { 'Content-Type': 'application/json', 'X-HMU-Token': token },
-   body: JSON.stringify({ fetch: true })
-  });
-  if (!res.ok) {
-   const err = await res.json().catch(() => ({}));
-   throw Error(err.error || 'Lỗi khi kiểm tra Git');
-  }
-  const data = await res.json();
-  const check = data.check;
-  const versions = data.versions;
-  if (check?.current) {
-   if ($('versionBadge')) $('versionBadge').textContent = 'Phiên bản: ' + formatVersionBadge(check.current);
-   renderUpdateCurrentInfo(check.current);
-   if ($('btnRollbackPrev')) {
-    const canRb = check.current.can_rollback !== undefined ? !!check.current.can_rollback : !!check.current.previous_commit;
-    $('btnRollbackPrev').disabled = !canRb;
-   }
-  }
-  if ($('updateDot')) {
-   $('updateDot').classList.toggle('hide', !check?.update_available);
-  }
-  renderComparisonStatus(check);
-  if (versions) {
-   renderVersionSelect(versions, check?.current?.commit);
-  }
-  if (check?.update_available) {
-   notify(`Có ${check.behind} bản cập nhật mới trên Git`, 'info');
-  } else if (check?.status === 'up_to_date') {
-   notify('Công cụ đang ở phiên bản mới nhất', 'success');
-  }
- } catch (e) {
-  status(e.message, true);
-  notify(formatErrorToast(e), 'err');
-  if ($('updateComparisonStatus')) {
-   $('updateComparisonStatus').textContent = '⚠️ Lỗi kiểm tra: ' + e.message;
-  }
- } finally {
-  if (btn) { btn.disabled = false; btn.textContent = oldText; }
- }
 }
 
 async function waitForServerRestart(pollInterval = 1000, maxAttempts = 30) {
@@ -1312,38 +1175,30 @@ async function waitForServerRestart(pollInterval = 1000, maxAttempts = 30) {
  return false;
 }
 
-async function applyGitVersion(target) {
- if (!target) {
-  notify('Vui lòng chọn một phiên bản để chuyển đổi', 'err');
-  return;
- }
- const isLatest = target === 'latest';
- const label = isLatest ? 'bản mới nhất' : `phiên bản "${target}"`;
- if (typeof window.confirm === 'function' && !window.confirm(`Xác nhận chuyển sang ${label}? Công cụ sẽ tự khởi động lại.`)) {
-  return;
- }
+async function sendUpdate(path, progressText, doneMessage) {
  const notice = $('updateRestartNotice');
  if (notice) {
-  notice.textContent = `Đang chuyển sang ${label}...`;
+  notice.textContent = progressText;
   notice.classList.remove('hide');
  }
  try {
-  const res = await fetch('/update/apply', {
+  const res = await fetch(path, {
    method: 'POST',
    headers: { 'Content-Type': 'application/json', 'X-HMU-Token': token },
-   body: JSON.stringify({ target, restart: true })
+   body: JSON.stringify({ restart: true })
   });
   if (!res.ok) {
    const err = await res.json().catch(() => ({}));
-   throw Error(err.error || 'Lỗi khi chuyển phiên bản');
+   throw Error(err.error || 'Lỗi khi đổi phiên bản');
   }
   const data = await res.json();
   if (data.restarting) {
    await waitForServerRestart();
-  } else {
-   notify(`Đã chuyển sang ${label}`, 'success');
-   await loadUpdateStatus();
+   return;
   }
+  if (notice) notice.classList.add('hide');
+  notify(data.result && data.result.status === 'noop' ? 'Bạn đang dùng bản mới nhất' : doneMessage, 'success');
+  await loadUpdateStatus();
  } catch (e) {
   if (notice) notice.classList.add('hide');
   status(e.message, true);
@@ -1351,37 +1206,41 @@ async function applyGitVersion(target) {
  }
 }
 
-async function rollbackGitVersion() {
- if (typeof window.confirm === 'function' && !window.confirm('Xác nhận quay lại phiên bản trước đó (Rollback)? Công cụ sẽ tự khởi động lại.')) {
-  return;
- }
- const notice = $('updateRestartNotice');
- if (notice) {
-  notice.textContent = 'Đang quay lại phiên bản trước đó...';
-  notice.classList.remove('hide');
- }
+async function checkAndUpdate() {
+ const btn = $('btnCheckUpdate');
+ const oldText = btn ? btn.textContent : '';
+ if (btn) { btn.disabled = true; btn.textContent = 'Đang kiểm tra…'; }
  try {
-  const res = await fetch('/update/rollback', {
+  const res = await fetch('/update/check', {
    method: 'POST',
    headers: { 'Content-Type': 'application/json', 'X-HMU-Token': token },
-   body: JSON.stringify({ restart: true })
+   body: '{}'
   });
   if (!res.ok) {
    const err = await res.json().catch(() => ({}));
-   throw Error(err.error || 'Lỗi khi quay lại phiên bản trước');
+   throw Error(err.error || 'Lỗi khi kiểm tra bản cập nhật');
   }
-  const data = await res.json();
-  if (data.restarting) {
-   await waitForServerRestart();
-  } else {
-   notify('Đã quay lại phiên bản trước đó', 'success');
-   await loadUpdateStatus();
+  const check = await res.json();
+  showCurrentVersion(check.current);
+  renderComparisonStatus(check);
+  if (!check.update_available) {
+   notify('Bạn đang dùng bản mới nhất', 'success');
+   return;
   }
+  if (typeof window.confirm === 'function' && !window.confirm(`Có bản mới (${check.latest_short_commit}). Cập nhật ngay? Công cụ sẽ tự khởi động lại.`)) return;
+  await sendUpdate('/update/apply', 'Đang tải và cài bản mới...', 'Đã cập nhật bản mới nhất');
  } catch (e) {
-  if (notice) notice.classList.add('hide');
   status(e.message, true);
   notify(formatErrorToast(e), 'err');
+  if ($('updateComparisonStatus')) $('updateComparisonStatus').textContent = '⚠️ Lỗi kiểm tra: ' + e.message;
+ } finally {
+  if (btn) { btn.disabled = false; btn.textContent = oldText; }
  }
+}
+
+async function rollbackVersion() {
+ if (typeof window.confirm === 'function' && !window.confirm('Xác nhận quay lại phiên bản trước? Công cụ sẽ tự khởi động lại.')) return;
+ await sendUpdate('/update/rollback', 'Đang quay lại phiên bản trước...', 'Đã quay lại phiên bản trước');
 }
 
 if ($('openUpdateModal')) {
@@ -1398,23 +1257,10 @@ if ($('closeUpdateModal')) {
  };
 }
 if ($('btnCheckUpdate')) {
- $('btnCheckUpdate').onclick = () => checkGitUpdates();
-}
-if ($('btnUpdateLatest')) {
- $('btnUpdateLatest').onclick = () => applyGitVersion('latest');
+ $('btnCheckUpdate').onclick = () => checkAndUpdate();
 }
 if ($('btnRollbackPrev')) {
- $('btnRollbackPrev').onclick = () => rollbackGitVersion();
-}
-if ($('btnSwitchSelectedVersion')) {
- $('btnSwitchSelectedVersion').onclick = () => {
-  const sel = $('versionSelect')?.value;
-  if (!sel) {
-   notify('Vui lòng chọn một phiên bản trong danh sách', 'err');
-   return;
-  }
-  return applyGitVersion(sel);
- };
+ $('btnRollbackPrev').onclick = () => rollbackVersion();
 }
 
 syncShortcutHints();

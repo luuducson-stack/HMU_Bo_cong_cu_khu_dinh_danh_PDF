@@ -5,7 +5,7 @@
  <div><span class="brand">HMU</span><h1>Khử định danh PDF</h1></div>
  <div class="masthead-actions">
   <span id="versionBadge" class="local-badge">Phiên bản: ...</span>
-  <button type="button" id="openUpdateModal" class="update-btn">🔄 Phiên bản &amp; Cập nhật <span id="updateDot" class="update-dot hide"></span></button>
+  <button type="button" id="openUpdateModal" class="update-btn">🔄 Phiên bản &amp; Cập nhật</button>
   <span class="local-badge">Chạy trên máy</span>
  </div>
 </header>
@@ -95,24 +95,14 @@
 <div id="updateModal" class="update-overlay hide" role="dialog" aria-modal="true" aria-labelledby="updateHeading">
  <div class="update-dialog panel">
   <div class="update-modal-header">
-   <h2 id="updateHeading">🔄 Quản lý Phiên bản &amp; Cập nhật Git</h2>
+   <h2 id="updateHeading">🔄 Quản lý Phiên bản &amp; Cập nhật</h2>
    <button type="button" id="closeUpdateModal" class="close-btn" aria-label="Đóng">&times;</button>
   </div>
   <div id="updateCurrentInfo" class="update-info-block"></div>
   <div id="updateComparisonStatus" class="update-status-block"></div>
   <div class="update-quick-actions form-row">
-   <button type="button" id="btnCheckUpdate">Kiểm tra trên Git</button>
-   <button type="button" id="btnUpdateLatest" class="primary">Cập nhật bản mới nhất</button>
-   <button type="button" id="btnRollbackPrev">Quay lại bản trước đó</button>
-  </div>
-  <div class="update-version-select-block">
-   <label for="versionSelect"><b>Chọn phiên bản cụ thể (Tag hoặc Commit):</b></label>
-   <div class="form-row">
-    <select id="versionSelect" class="grow">
-     <option value="">-- Bấm &quot;Kiểm tra trên Git&quot; để nạp danh sách --</option>
-    </select>
-    <button type="button" id="btnSwitchSelectedVersion" class="primary">Chuyển sang phiên bản đã chọn</button>
-   </div>
+   <button type="button" id="btnCheckUpdate" class="primary">Kiểm tra &amp; cập nhật</button>
+   <button type="button" id="btnRollbackPrev">Quay lại bản trước</button>
   </div>
   <div id="updateRestartNotice" class="update-restart-notice hide"></div>
  </div>
