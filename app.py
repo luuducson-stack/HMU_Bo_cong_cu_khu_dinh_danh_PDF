@@ -1,5 +1,5 @@
 """Single-user localhost review application v2.0; no cloud services."""
-import argparse, json, os, re, secrets, threading, time, unicodedata, urllib.parse, urllib.request, webbrowser
+import argparse, json, os, re, secrets, subprocess, threading, time, unicodedata, urllib.parse, urllib.request, webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from delivery import (
@@ -8,6 +8,7 @@ from delivery import (
 )
 from error_pipeline import record_error_event, get_error_report
 import fitz
+import updater
 from engine import (
     prepare, export, save_json, validate_review, approve_all_pages,
     generate_audit_markdown, prepare_case, export_case, extract_case_seeds, _strip_accents
@@ -187,7 +188,7 @@ class Conflict(ValueError):
     pass
 
 
-def create_server(root: Path, active: Path | None = None, port: int = 0):
+def create_server(root: Path, active: Path | None = None, port: int = 0, repo_dir: Path | None = None):
     """Create a loopback-only server. The caller owns serve/shutdown lifecycle."""
     import copy, math, batch, time
     from contextlib import ExitStack
@@ -200,6 +201,15 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
     progress = {'status': 'idle', 'task_id': None, 'progress': '', 'result': None, 'error': None}
     batch_db=root/'batch'/'queue.sqlite3';active_queue_id=None
     session_path=root/'last_session.json'
+    session_meta = {
+        'selected_path': '',
+        'destination': '',
+        'study_id': 'HMU_CASE_0001',
+        'whole_case': False,
+        'active_file_index': 1,
+        'active_page': 1,
+        'updated_at': 0.0,
+    }
     if batch_db.exists():
         try:
             with batch.queue_lock(batch_db):
@@ -207,9 +217,32 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
         except Exception:
             pass
 
-    def save_session():
+    def save_session(**updates):
+        for k, v in updates.items():
+            if k in session_meta and v is not None:
+                if k in {'selected_path', 'destination', 'study_id'}:
+                    session_meta[k] = str(v)
+                elif k == 'whole_case':
+                    session_meta[k] = bool(v)
+                elif k in {'active_file_index', 'active_page'} and isinstance(v, int) and v >= 1:
+                    session_meta[k] = v
+        if case_root and (case_root / 'case_manifest.json').is_file() and active:
+            try:
+                mf = json.loads((case_root / 'case_manifest.json').read_text(encoding='utf-8'))
+                for item in mf.get('files', []):
+                    if (case_root / item['sub_job']).resolve() == active.resolve():
+                        session_meta['active_file_index'] = int(item.get('index', 1))
+                        break
+            except Exception:
+                pass
+        session_meta['updated_at'] = time.time()
         try:
-            save_json(session_path,{'active':str(active) if active else None,'case_root':str(case_root) if case_root else None,'active_queue_id':active_queue_id})
+            save_json(session_path, {
+                'active': str(active) if active else None,
+                'case_root': str(case_root) if case_root else None,
+                'active_queue_id': active_queue_id,
+                **session_meta,
+            })
         except OSError:
             pass
 
@@ -217,15 +250,20 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
         rows=batch.list_jobs(batch_db,details=False);items=[]
         for row in rows:
             qc=row['result'].get('verification',{})
-            item={k:row[k] for k in ('id','source_name','pages','state','error','duplicate_of','revision','updated')}
+            item={k:row[k] for k in ('id','source_path','source_name','pages','state','error','duplicate_of','revision','updated')}
             item.update(qc_status=qc.get('status'),warnings=qc.get('finding_count',0)+qc.get('unreadable_count',0),
                         seconds=row['result'].get('machine_seconds'),download=bool(row['result'].get('output')),
+                        issues=qc.get('issues',[]),unreadable_pages=qc.get('unreadable_pages',[]),
+                        can_open=(Path(row['job_dir'])/'review'/'review.json').is_file(),
                         error_detail=row['result'].get('error_detail'))
             items.append(item)
         status_path=batch_db.parent/'coordinator_status.json'
         status=json.loads(status_path.read_text(encoding='utf8')) if status_path.exists() else {}
-        from batch_runtime import process_alive
-        status['running']=bool(status.get('pid') and time.time()-status.get('heartbeat',0)<30 and process_alive(status['pid']))
+        try:
+            from batch_runtime import process_alive
+            status['running']=bool(status.get('pid') and time.time()-status.get('heartbeat',0)<30 and process_alive(status['pid']))
+        except Exception:
+            status['running']=bool(status.get('running', False))
         return dict(jobs=items,coordinator=status)
 
     def batch_post(path,req):
@@ -270,12 +308,25 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
             return result
         if path=='/batch/release_folder':
             return batch.release_folder(batch_db,req.get('paths'),req.get('destination'))
+        if path=='/batch/retry':
+            if req.get('queue_ids') is not None:
+                res=batch.retry_jobs(batch_db,req.get('queue_ids'))
+                retried=res['retried']
+                skipped=res['skipped']
+            else:
+                ident=req.get('queue_id')
+                batch.retry_job(batch_db,ident)
+                retried=[ident]
+                skipped=[]
+            if retried:
+                batch.resume_queue(batch_db)
+                if not batch_status()['coordinator']['running']:batch.start_background(batch_db)
+            return {'queued':bool(retried),'retried':retried,'skipped':skipped}
         ident=req.get('queue_id');row=batch.get_job(batch_db,ident)
         if path=='/batch/open_job':
             with batch.review_lock(batch_db,ident) as row:
                 active=Path(row['job_dir'])/'review';case_root=None;active_queue_id=ident
                 validated_jobs.clear();save_session();return state()
-        if path=='/batch/retry':batch.retry_job(batch_db,ident);return {'queued':True}
         if path=='/batch/cancel':batch.cancel_job(batch_db,ident);return {'cancelled':True}
         if path=='/batch/reprocess':
             batch.reprocess_job(batch_db,ident,expected_revision=req.get('revision'))
@@ -306,28 +357,33 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
             save_json(job / 'review.json', d)
         return d
 
-    if active is None and session_path.exists():
+    if session_path.exists():
         try:
             sess = json.loads(session_path.read_text(encoding='utf-8'))
-            cand_active = Path(sess['active']).resolve() if sess.get('active') else None
-            cand_case = Path(sess['case_root']).resolve() if sess.get('case_root') else None
-            cand_queue = sess.get('active_queue_id')
-            if cand_active and cand_active.is_relative_to(root) and (cand_active / 'review.json').exists() and (cand_active / 'working_private.pdf').exists():
-                read_review(cand_active)
-                if cand_case:
-                    if cand_case.is_relative_to(root) and (cand_case / 'case_manifest.json').exists() and cand_active.is_relative_to(cand_case):
+            for k in ('selected_path', 'destination', 'study_id', 'whole_case', 'active_file_index', 'active_page', 'updated_at'):
+                if k in sess and sess[k] is not None:
+                    session_meta[k] = sess[k]
+            if active is None:
+                cand_active = Path(sess['active']).resolve() if sess.get('active') else None
+                cand_case = Path(sess['case_root']).resolve() if sess.get('case_root') else None
+                cand_queue = sess.get('active_queue_id')
+                if cand_active and cand_active.is_relative_to(root) and (cand_active / 'review.json').exists() and (cand_active / 'working_private.pdf').exists():
+                    read_review(cand_active)
+                    if cand_case:
+                        if cand_case.is_relative_to(root) and (cand_case / 'case_manifest.json').exists() and cand_active.is_relative_to(cand_case):
+                            active = cand_active
+                            case_root = cand_case
+                    elif cand_queue:
+                        row = batch.get_job(batch_db, cand_queue)
+                        if row['state'] in {'NEEDS_REVIEW', 'READY'} and (Path(row['job_dir']) / 'review').resolve() == cand_active:
+                            active = cand_active
+                            active_queue_id = cand_queue
+                    else:
                         active = cand_active
-                        case_root = cand_case
-                elif cand_queue:
-                    row = batch.get_job(batch_db, cand_queue)
-                    if row['state'] in {'NEEDS_REVIEW', 'READY'} and (Path(row['job_dir']) / 'review').resolve() == cand_active:
-                        active = cand_active
-                        active_queue_id = cand_queue
-                else:
-                    active = cand_active
         except Exception:
-            active = None; case_root = None; active_queue_id = None
-    elif active is not None:
+            if active is None:
+                active = None; case_root = None; active_queue_id = None
+    if active is not None:
         save_session()
 
     def find_reusable_open_path(target: Path):
@@ -348,10 +404,13 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                     if Path(manifest.get('source_path', '')).resolve() != resolved_target:
                         continue
                     files_list = manifest.get('files', [])
-                    if [f.get('source_name') for f in files_list] != [p.name for p in pdfs]:
+                    if not files_list or len(files_list) > len(pdfs):
+                        continue
+                    expected_names = [p.name for p in pdfs[:len(files_list)]]
+                    if [f.get('source_name') for f in files_list] != expected_names:
                         continue
                     valid = True
-                    for item, pdf_file in zip(files_list, pdfs):
+                    for item, pdf_file in zip(files_list, pdfs[:len(files_list)]):
                         sub_job = (cand_case / item['sub_job']).resolve()
                         if not sub_job.is_relative_to(cand_case):
                             valid = False; break
@@ -360,6 +419,7 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                             valid = False; break
                     if not valid:
                         continue
+                    is_complete = bool(manifest.get('complete', True)) and len(files_list) == len(pdfs)
                     if case_root == cand_case and active and active.is_relative_to(cand_case):
                         chosen = active
                     else:
@@ -367,7 +427,7 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                         chosen = (cand_case / active_rel).resolve()
                         if not chosen.is_relative_to(cand_case) or not (chosen / 'review.json').exists():
                             chosen = (cand_case / files_list[0]['sub_job']).resolve()
-                    return cand_case, chosen
+                    return cand_case, chosen, is_complete
                 except Exception:
                     continue
             return None
@@ -378,7 +438,7 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                 d = read_review(cand_job)
                 if d.get('source_path') and Path(d['source_path']).resolve() == resolved_target:
                     if d.get('source_sha256') == engine.sha(resolved_target):
-                        return None, cand_job
+                        return None, cand_job, True
             except Exception:
                 continue
         return None
@@ -395,7 +455,7 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                 sub = read_review(job)
                 files.append({'index': item['index'], 'name': item['source_name'], 'job_id': sub['job_id'],
                               'reviewed': sum(bool(p['reviewed']) for p in sub['pages']), 'pages': len(sub['pages'])})
-        return {'review': d, 'files': files, 'batch_case': bool(case_root),'queue_id':active_queue_id, 'workspace': get_workspace_config(root), 'active_task': dict(progress) if progress['status'] == 'running' else None}
+        return {'review': d, 'files': files, 'batch_case': bool(case_root),'queue_id':active_queue_id, 'workspace': get_workspace_config(root), 'session': dict(session_meta), 'active_task': dict(progress) if progress['status'] == 'running' else None}
 
     def check_identity(req):
         if not active:
@@ -403,7 +463,7 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
         d = read_review(active)
         if active_queue_id:
             row=batch.get_job(batch_db,active_queue_id)
-            if row['state'] not in {'NEEDS_REVIEW','READY'} or Path(row['job_dir'])/'review'!=active:
+            if row['state'] not in {'NEEDS_REVIEW','READY','FAILED'} or Path(row['job_dir'])/'review'!=active:
                 raise Conflict('File đang được xử lý lại; hãy mở lại từ hàng đợi khi hoàn tất')
         if type(req.get('revision')) is not int or req.get('job_id') != d['job_id'] or req.get('revision') != d['revision']:
             raise Conflict('Công việc hoặc phiên duyệt đã thay đổi. Hãy tải lại trạng thái trước khi lưu.')
@@ -422,7 +482,7 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                 return result
             except Exception as exc:
                 err = record_error_event(root, exc, stage=stage, source_file=source_file, job_id=job_id)
-                with lock: progress.update(status='error', error=str(exc), error_detail=err, progress='')
+                with lock: progress.update(status='error', error=err['message'], error_detail=err, progress='')
                 if not async_mode: raise
         if async_mode:
             threading.Thread(target=execute, daemon=True).start()
@@ -484,6 +544,8 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                             with fitz.open(pdf) as doc:
                                 if not 1<=pn<=len(doc):raise ValueError('Invalid page')
                                 self.send(200,doc[pn-1].get_pixmap(dpi=120,alpha=False).tobytes('png'),'image/png');return
+                    if path == '/update/status':
+                        self.send(200, {'current': updater.current_version(root)}); return
                     if not active: self.send(404, {'error':'No active job'}); return
                     d = read_review(active)
                     if q.get('job_id', [''])[0] != d['job_id']: raise Conflict('Job changed; reload state')
@@ -512,10 +574,10 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                     self.send(404, {'error':'Not found'})
             except Conflict as exc:
                 err = record_error_event(root, exc, stage='CONFLICT', http_path=path)
-                self.send(409, {'error':str(exc), 'code':'CONFLICT', 'error_detail': err})
+                self.send(409, {'error':err['message'], 'code':'CONFLICT', 'error_detail': err})
             except Exception as exc:
                 err = record_error_event(root, exc, stage='HTTP_API', http_path=path)
-                self.send(400, {'error':str(exc), 'error_detail': err})
+                self.send(400, {'error':err['message'], 'error_detail': err})
         def do_POST(self):
             nonlocal active, case_root, active_queue_id
             if not self.host_ok() or self.headers.get('X-HMU-Token') != token:
@@ -536,15 +598,31 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                     if path == '/pick_folder':
                         req = json.loads(body) if body else {}
                         initial_dir = req.get('initial_dir') if isinstance(req, dict) else None
+                        target_field = req.get('target') if isinstance(req, dict) else None
                         lock.release()
                         try:
                             chosen = _pick_folder_dialog(initial_dir)
                         finally:
                             lock.acquire()
                         if chosen:
+                            if target_field in {None, 'localPath'}:
+                                save_session(selected_path=chosen)
+                            elif target_field == 'folderDestination':
+                                save_session(destination=chosen)
                             self.send(200, {'path': chosen})
                         else:
                             self.send(200, {'path': None, 'cancelled': True})
+                        return
+                    if path == '/session/save':
+                        req = json.loads(body) if body else {}
+                        if not isinstance(req, dict):
+                            raise ValueError('Invalid session payload')
+                        updates = {}
+                        for k in ('selected_path', 'destination', 'study_id', 'whole_case', 'active_file_index', 'active_page'):
+                            if k in req and req[k] is not None:
+                                updates[k] = req[k]
+                        save_session(**updates)
+                        self.send(200, {'saved': True, 'session': dict(session_meta)})
                         return
                     if path == '/workspace/init':
                         req = json.loads(body) if body else {}
@@ -563,6 +641,32 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                     if path.startswith('/batch/'):
                         if path=='/batch/open_job' and progress['status']=='running':raise Conflict('Đợi thao tác hiện tại hoàn tất trước khi chuyển file')
                         self.send(200,batch_post(path,json.loads(body)));return
+                    if path == '/update/check':
+                        lock.release()  # network call: do not stall other requests while GitHub is slow or offline
+                        try:
+                            check_res = updater.check_for_updates(root)
+                        except updater.UpdateError as exc:
+                            self.send(400, {'error': str(exc)}); return
+                        finally:
+                            lock.acquire()
+                        self.send(200, check_res); return
+                    if path in {'/update/apply', '/update/rollback'}:
+                        coord = batch_status().get('coordinator', {})
+                        if progress['status'] == 'running' or coord.get('active', 0) > 0:
+                            raise Conflict('Đang xử lý tài liệu hoặc hàng đợi. Vui lòng đợi hoàn tất hoặc tạm dừng trước khi đổi phiên bản.')
+                        save_session()
+                        req = json.loads(body) if body else {}
+                        repo = getattr(self.server, 'repo_dir', Path(__file__).resolve().parent)
+                        opts = dict(run_pip=bool(req.get('run_pip', True)), run_smoke_test=bool(req.get('run_smoke_test', True)))
+                        try:
+                            res = updater.apply_update(repo, root, **opts) if path == '/update/apply' else updater.rollback(repo, root, **opts)
+                        except updater.UpdateError as exc:
+                            self.send(400, {'error': str(exc)}); return
+                        restart = bool(req.get('restart', True)) and res['status'] != 'noop'
+                        if restart:
+                            self.server.restart_requested = True
+                            threading.Timer(0.25, self.server.shutdown).start()
+                        self.send(200, {'result': res, 'restarting': restart}); return
                     if progress['status']=='running': raise Conflict('Đang xử lý tác vụ. Hãy đợi hoàn tất.')
                     if path in {'/upload','/open_path','/export','/export_folder'} and batch_status()['coordinator'].get('active',0):
                         raise Conflict('Máy đang chạy hàng đợi. Thêm file vào hàng đợi hoặc tạm dừng và đợi file đang chạy xong; vẫn có thể duyệt file khác.')
@@ -572,6 +676,13 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                         sid=self.headers.get('X-Study-ID','HMU_CASE_0001') if path=='/upload' else str(req.get('study_id','HMU_CASE_0001'))
                         if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}',sid): raise ValueError('Invalid research ID')
                         target=None if path=='/upload' else _resolve_local_path(str(req.get('path','')))
+                        if path == '/open_path' and target:
+                            save_session(
+                                selected_path=str(target.resolve()),
+                                destination=req.get('destination') if req.get('destination') is not None else None,
+                                study_id=sid,
+                                whole_case=req.get('whole_case') if req.get('whole_case') is not None else None,
+                            )
                         folder=None
                         if path=='/upload':
                             folder=root/(sid+'_'+secrets.token_hex(8));folder.mkdir(mode=0o700)
@@ -595,14 +706,46 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                                     cloned_folders = pc_res.get('cloned_folders', [])
                                     target_mapping = pc_res.get('mappings', {})
 
+                            def _on_case_file_prepared(c_root, sub_job, idx, total):
+                                nonlocal active, case_root, active_queue_id
+                                with lock:
+                                    if case_root != c_root or active is None or not active.is_relative_to(c_root):
+                                        case_root = c_root
+                                        active = sub_job
+                                        active_queue_id = None
+                                    save_session(
+                                        selected_path=str(target.resolve()),
+                                        destination=req.get('destination') if req.get('destination') is not None else None,
+                                        study_id=sid,
+                                        whole_case=req.get('whole_case') if req.get('whole_case') is not None else None,
+                                    )
+
                             reused=find_reusable_open_path(target) if path=='/open_path' and not req.get('force_reprepare') else None
                             if reused:
-                                new_case,new_active=reused
+                                new_case,new_active,is_complete=reused
+                                if not is_complete and new_case is not None:
+                                    manifest=prepare_case(
+                                        target,
+                                        new_case,
+                                        study_id=sid,
+                                        progress_cb=set_progress,
+                                        resume=True,
+                                        on_file_prepared=_on_case_file_prepared,
+                                    )
+                                    if not new_active or not (new_active/'review.json').is_file():
+                                        new_active=new_case/manifest['files'][0]['sub_job']
                             else:
                                 if folder is None:
                                     folder=root/(sid+'_'+secrets.token_hex(8));folder.mkdir(mode=0o700)
                                 if target.is_dir():
-                                    manifest=prepare_case(target,folder/'case',study_id=sid,progress_cb=set_progress)
+                                    manifest=prepare_case(
+                                        target,
+                                        folder/'case',
+                                        study_id=sid,
+                                        progress_cb=set_progress,
+                                        resume=False,
+                                        on_file_prepared=_on_case_file_prepared,
+                                    )
                                     new_case=folder/'case';new_active=new_case/manifest['files'][0]['sub_job']
                                 else:
                                     new_case=None;new_active=folder/'review'
@@ -635,7 +778,17 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                                 except Exception:
                                     pass
                             with lock:
-                                active=new_active;case_root=new_case;active_queue_id=None;validated_jobs.clear();save_session()
+                                active=new_active;case_root=new_case;active_queue_id=None;validated_jobs.clear()
+                                if path == '/open_path' and target:
+                                    save_session(
+                                        selected_path=str(target.resolve()),
+                                        destination=req.get('destination') if req.get('destination') is not None else None,
+                                        study_id=sid,
+                                        whole_case=req.get('whole_case') if req.get('whole_case') is not None else None,
+                                        active_page=1 if not reused else None,
+                                    )
+                                else:
+                                    save_session(active_page=1)
                                 cur_state = state()
                                 cur_state['cloned_folders'] = cloned_folders
                                 return cur_state
@@ -651,7 +804,7 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                         if not selected.is_relative_to(case_root): raise ValueError('Invalid sub-job')
                         manifest['active_sub_job']=items[0]['sub_job']
                         save_json(case_root/'case_manifest.json',manifest)
-                        active=selected;save_session();self.send(200,state());return
+                        active=selected;save_session(active_file_index=int(items[0]['index']), active_page=1);self.send(200,state());return
                     if path in {'/save','/save_page'}:
                         updated=copy.deepcopy(current)
                         pages=req.get('pages') if path=='/save' else [req]
@@ -674,6 +827,10 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                                 if type(x['selected'])!=bool:raise ValueError('Invalid selection')
                                 y['selected']=x['selected']
                         updated['revision']+=1;save_json(job/'review.json',updated)
+                        if path == '/save_page':
+                            save_session(active_page=int(req['page']))
+                        else:
+                            save_session()
                         if active_queue_id:
                             row=batch.get_job(batch_db,active_queue_id)
                             batch.set_stage_result(batch_db,active_queue_id,expected_state=row['state'],result={**row['result'],'state':'NEEDS_REVIEW','revision':updated['revision']})
@@ -682,6 +839,7 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                         updated=approve_all_pages(job)
                         if updated.get('revision',0)<=current['revision']:
                             updated['revision']=current['revision']+1;save_json(job/'review.json',updated)
+                        save_session()
                         self.send(200,{'review':updated});return
                     if path=='/export_folder':
                         if active_queue_id:raise ValueError('Dùng chức năng xuất thư mục trong hàng đợi cho hồ sơ này')
@@ -705,7 +863,7 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                     self.send(404,{'error':'Not found'})
             except Conflict as exc:
                 err=record_error_event(root,exc,stage='CONFLICT',http_path=path)
-                self.send(409,{'error':str(exc),'code':'CONFLICT','error_detail':err})
+                self.send(409,{'error':err['message'],'code':'CONFLICT','error_detail':err})
             except Exception as exc:
                 stg='WORKSPACE_INIT' if path=='/workspace/init' else ('OPEN_PATH' if path=='/open_path' else ('UPLOAD' if path=='/upload' else 'HTTP_API'))
                 src_f=None
@@ -717,7 +875,7 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
                         src_f=original_name or None
                 except Exception:pass
                 err=record_error_event(root,exc,stage=stg,source_file=src_f,http_path=path)
-                self.send(400,{'error':str(exc),'error_detail':err})
+                self.send(400,{'error':err['message'],'error_detail':err})
     class LocalServer(ThreadingHTTPServer):
         allow_reuse_address = False
         def server_bind(self):
@@ -727,6 +885,9 @@ def create_server(root: Path, active: Path | None = None, port: int = 0):
             super().server_bind()
     server=LocalServer(('127.0.0.1',port),Handler)
     server.daemon_threads=True
+    server.save_session=save_session
+    server.repo_dir=Path(repo_dir).resolve() if repo_dir else Path(__file__).resolve().parent
+    server.restart_requested=False
     return server
 
 
@@ -764,6 +925,7 @@ def _is_hmu_server_running(port: int) -> bool:
 
 
 def main():
+    import atexit, signal
     _configure_windows_console()
     ap=argparse.ArgumentParser();ap.add_argument('--job');ap.add_argument('--port',type=int,default=8765)
     ap.add_argument('--root',default='HMU_JOBS');ap.add_argument('--no-browser',action='store_true');args=ap.parse_args()
@@ -790,6 +952,22 @@ def main():
         if report_file.exists():
             print(f"[HMU BÁO LỖI] Chi tiết lỗi đã ghi tại: {report_file.resolve()}")
         raise
+    flush_session = getattr(server, 'save_session', None)
+    if callable(flush_session):
+        atexit.register(flush_session)
+        def _handle_shutdown_signal(signum, frame):
+            try:
+                flush_session()
+            except Exception:
+                pass
+            raise KeyboardInterrupt
+        for sig_name in ('SIGINT', 'SIGTERM', 'SIGBREAK'):
+            sig = getattr(signal, sig_name, None)
+            if sig is not None:
+                try:
+                    signal.signal(sig, _handle_shutdown_signal)
+                except Exception:
+                    pass
     url=f'http://127.0.0.1:{server.server_port}';print('HMU PDF review: '+url)
     print('========================================================================')
     print('LƯU Ý: KHÔNG ĐÓNG CỬA SỔ ĐEN NÀY KHI ĐANG DUYỆT BỆNH ÁN (Hãy thu nhỏ xuống thanh Taskbar)')
@@ -798,11 +976,18 @@ def main():
     try:server.serve_forever()
     except KeyboardInterrupt:pass
     finally:
+        if callable(flush_session):
+            try:
+                flush_session()
+            except Exception:
+                pass
         server.server_close()
         report=get_error_report(root_path)
         if report.get('total_errors',0)>0:
             report_file=root_path/'error_report.json'
             print(f"\n[HMU BÁO LỖI] Phiên làm việc ghi nhận {report['total_errors']} lỗi.")
             print(f"[HMU BÁO LỖI] Báo cáo chi tiết: {report_file.resolve()}\n")
+    if getattr(server, 'restart_requested', False) is True:
+        raise SystemExit(42)
 
 if __name__=='__main__':main()

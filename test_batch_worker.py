@@ -189,5 +189,63 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(err['code_location']['file'],'test_batch_worker.py')
         self.assertIsInstance(err['code_location']['line'],int)
 
+    def test_worker_main_persists_distinct_root_cause_error_json_without_type_error(self):
+        import io
+        import engine
+        jobs_root = self.root / 'hmu_jobs'
+        db = jobs_root / 'batch' / 'queue.sqlite3'
+        s1 = self.root / 'err1.pdf'
+        s2 = self.root / 'err2.pdf'
+        for p, txt in ((s1, 'Case 1'), (s2, 'Case 2')):
+            with fitz.open() as doc:
+                doc.new_page().insert_text((20, 40), txt)
+                doc.save(p)
+        ids = batch.enqueue(db, [s1, s2])
+        r1 = batch.claim_next(db)
+        r2 = batch.claim_next(db)
+        r1['attempt_id'] = 'att_one'
+        r2['attempt_id'] = 'att_two'
+        req1 = Path(r1['job_dir']) / 'request_att_one.json'
+        req2 = Path(r2['job_dir']) / 'request_att_two.json'
+        req1.parent.mkdir(parents=True, exist_ok=True)
+        req2.parent.mkdir(parents=True, exist_ok=True)
+        engine.save_json(req1, {'job': r1, 'ocr_workers': 1, 'render_workers': 1})
+        engine.save_json(req2, {'job': r2, 'ocr_workers': 1, 'render_workers': 1})
+
+        def fail_one(*args, **kwargs):
+            try:
+                raise KeyError('missing_font_xref_77')
+            except KeyError as cause:
+                raise ValueError('Failed to rebuild page 3 redaction') from cause
+
+        def fail_two(*args, **kwargs):
+            raise RuntimeError('OCR engine failed on page 5: corrupt image stream')
+
+        with patch.object(self.worker, 'process_job', side_effect=fail_one), \
+             patch('sys.argv', ['batch_worker.py', '--request', str(req1)]), \
+             patch('sys.stdin', io.StringIO('START\n')):
+            with self.assertRaises(ValueError):
+                self.worker.main()
+
+        with patch.object(self.worker, 'process_job', side_effect=fail_two), \
+             patch('sys.argv', ['batch_worker.py', '--request', str(req2)]), \
+             patch('sys.stdin', io.StringIO('START\n')):
+            with self.assertRaises(RuntimeError):
+                self.worker.main()
+
+        err_file_1 = Path(r1['job_dir']) / 'error_att_one.json'
+        err_file_2 = Path(r2['job_dir']) / 'error_att_two.json'
+        self.assertTrue(err_file_1.is_file(), 'error_att_one.json must be written by batch_worker.main()')
+        self.assertTrue(err_file_2.is_file(), 'error_att_two.json must be written by batch_worker.main()')
+        e1 = json.loads(err_file_1.read_text(encoding='utf8'))
+        e2 = json.loads(err_file_2.read_text(encoding='utf8'))
+        self.assertNotEqual(e1['message'], e2['message'])
+        self.assertIn('Failed to rebuild page 3 redaction', e1['message'])
+        self.assertIn('missing_font_xref_77', e1.get('root_cause', ''))
+        self.assertIn('OCR engine failed on page 5', e2['message'])
+        self.assertEqual(e1['error_type'], 'ValueError')
+        self.assertEqual(e2['error_type'], 'RuntimeError')
+        self.assertTrue((jobs_root / 'error_report.json').is_file(), 'error_report.json must be saved at jobs_root')
+
 
 if __name__=='__main__':unittest.main()

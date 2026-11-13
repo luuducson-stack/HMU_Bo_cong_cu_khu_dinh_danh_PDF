@@ -833,5 +833,771 @@ class AppTests(unittest.TestCase):
     release.set()
     holder.join(timeout=2.0)
 
+ def test_batch_retry_single_and_bulk_starts_background_and_allows_opening_failed_with_review(self):
+  import batch, batch_worker
+  from unittest.mock import patch
+  s1 = self.root / 'retry_1.pdf'
+  s2 = self.root / 'retry_2.pdf'
+  s1.write_bytes(self.pdf())
+  s2.write_bytes(self.pdf())
+  db = self.root / 'jobs' / 'batch' / 'queue.sqlite3'
+  ids = batch.enqueue(db, [s1, s2])
+  r1 = batch.claim_next(db)
+  r2 = batch.claim_next(db)
+  with patch('output_qc.ocr_pdf_pages', return_value={1: ('Clinical stable', [])}):
+   res1 = batch_worker.process_job(r1, ocr_workers=1, render_workers=1)
+  batch.set_stage_result(db, ids[0], expected_state='PREPARING', result={'state': 'FAILED', 'error': 'Export verify failed'})
+  batch.set_stage_result(db, ids[1], expected_state='PREPARING', result={'state': 'FAILED', 'error': 'Worker crash'})
+  batch.pause_queue(db)
+
+  code, st = self.req('GET', '/batch/status')
+  self.assertEqual(code, 200, st)
+  by_id = {j['id']: j for j in st['jobs']}
+  self.assertEqual(by_id[ids[0]]['source_path'], str(s1.resolve()))
+  self.assertTrue(by_id[ids[0]]['can_open'], 'FAILED job with prepared review.json must report can_open=True')
+  self.assertFalse(by_id[ids[1]]['can_open'], 'FAILED job without review.json must report can_open=False')
+
+  # User can open FAILED job that already has review.json to inspect/test on canvas
+  code, opened = self.req('POST', '/batch/open_job', {'queue_id': ids[0]})
+  self.assertEqual(code, 200, opened)
+  self.assertEqual(opened['queue_id'], ids[0])
+
+  # Single retry and bulk retry both resume queue and start background coordinator
+  with patch('batch.start_background', return_value=9999) as mock_bg:
+   code, ret1 = self.req('POST', '/batch/retry', {'queue_id': ids[0]})
+   self.assertEqual(code, 200, ret1)
+   self.assertTrue(ret1.get('queued'))
+   self.assertIn(ids[0], ret1.get('retried', []))
+   self.assertEqual(mock_bg.call_count, 1)
+
+   code, ret2 = self.req('POST', '/batch/retry', {'queue_ids': [ids[1]]})
+   self.assertEqual(code, 200, ret2)
+   self.assertEqual(ret2.get('retried'), [ids[1]])
+   self.assertEqual(mock_bg.call_count, 2)
+
+  self.assertEqual(batch.get_job(db, ids[0])['state'], 'QUEUED')
+  self.assertEqual(batch.get_job(db, ids[1])['state'], 'QUEUED')
+
+ def test_single_folder_session_saves_picked_folder_and_active_page_across_restart(self):
+  from unittest.mock import patch
+  case_dir = self.root / 'ca_benh_don_01'
+  case_dir.mkdir(exist_ok=True)
+  for idx in range(1, 3):
+   doc = fitz.open()
+   for pno in range(1, 4):
+    page = doc.new_page(width=300, height=200)
+    page.insert_text((36, 72), f'Benh nhan Nguyen Van A - File {idx} Trang {pno}')
+   doc.save(case_dir / f'benh_an_{idx}.pdf')
+   doc.close()
+  dest_dir = self.root / 'ket_qua_xuat'
+  with patch.object(app, '_pick_folder_dialog', return_value=str(case_dir)):
+   code, picked = self.req('POST', '/pick_folder', {'initial_dir': str(self.root), 'target': 'localPath'})
+   self.assertEqual(code, 200, picked)
+  code, saved_sess = self.req('POST', '/session/save', {
+   'selected_path': str(case_dir),
+   'destination': str(dest_dir),
+   'study_id': 'HMU_SINGLE_01',
+   'whole_case': True,
+   'active_page': 1,
+  })
+  self.assertEqual(code, 200, saved_sess)
+  # Restart server BEFORE opening path -> selected_path & destination must still be restored
+  restarted1 = app.create_server(self.root / 'jobs', None, 0)
+  t1 = threading.Thread(target=restarted1.serve_forever, daemon=True); t1.start()
+  try:
+   c = http.client.HTTPConnection('127.0.0.1', restarted1.server_port, timeout=30)
+   c.request('GET', '/state'); r = c.getresponse(); st1 = json.loads(r.read()); c.close()
+   self.assertEqual(st1['session']['selected_path'], str(case_dir))
+   self.assertEqual(st1['session']['destination'], str(dest_dir))
+   self.assertEqual(st1['session']['study_id'], 'HMU_SINGLE_01')
+   self.assertTrue(st1['session']['whole_case'])
+  finally:
+   restarted1.shutdown(); restarted1.server_close(); t1.join()
+  # Open folder, switch to file 2, page 3, save page 3, then restart server
+  code, opened = self.req('POST', '/open_path', {'path': str(case_dir), 'study_id': 'HMU_SINGLE_01', 'destination': str(dest_dir)})
+  self.assertEqual(code, 200, opened)
+  code, st_f2 = self.req('POST', '/select_file', {**self.ident(opened['review']), 'file_index': 2})
+  self.assertEqual(code, 200, st_f2)
+  d2 = st_f2['review']
+  p3 = d2['pages'][2]
+  code, saved_p3 = self.req('POST', '/save_page', {
+   **self.ident(d2), 'page': 3, 'reviewed': True, 'manual_rects': [[10, 10, 80, 40]],
+   'note': ' Đã duyệt trang 3 file 2',
+   'selections': [{'id': q['id'], 'selected': q['selected']} for q in p3['proposals']]
+  })
+  self.assertEqual(code, 200, saved_p3)
+  restarted2 = app.create_server(self.root / 'jobs', None, 0)
+  t2 = threading.Thread(target=restarted2.serve_forever, daemon=True); t2.start()
+  try:
+   c = http.client.HTTPConnection('127.0.0.1', restarted2.server_port, timeout=30)
+   c.request('GET', '/state'); r = c.getresponse(); st2 = json.loads(r.read()); c.close()
+   self.assertEqual(st2['review']['job_id'], d2['job_id'])
+   self.assertEqual(st2['session']['active_file_index'], 2)
+   self.assertEqual(st2['session']['active_page'], 3)
+   self.assertEqual(st2['session']['selected_path'], str(case_dir.resolve()))
+  finally:
+   restarted2.shutdown(); restarted2.server_close(); t2.join()
+
+ def test_interrupted_folder_prepare_checkpoints_completed_files_and_resumes_without_reprocessing(self):
+  from unittest.mock import patch
+  import engine
+  case_dir = self.root / 'ca_benh_3_files'
+  case_dir.mkdir(exist_ok=True)
+  for idx in range(1, 4):
+   (case_dir / f'ho_so_{idx:02d}.pdf').write_bytes(self.pdf())
+  prepared_calls = []
+  orig_prepare = engine.prepare
+  def flaky_prepare(pdf_file, sub_job, *args, **kwargs):
+   prepared_calls.append(Path(pdf_file).name)
+   if len(prepared_calls) == 3:
+    raise RuntimeError('Terminal closed during file 3')
+   return orig_prepare(pdf_file, sub_job, *args, **kwargs)
+  with patch('engine.prepare', side_effect=flaky_prepare):
+   code, err_res = self.req('POST', '/open_path', {'path': str(case_dir), 'study_id': 'RESUME_CASE'})
+   self.assertEqual(code, 400, err_res)
+  # 2 files were prepared before crash; checkpoint manifest & last_session must exist
+  self.assertEqual(prepared_calls, ['ho_so_01.pdf', 'ho_so_02.pdf', 'ho_so_03.pdf'])
+  manifests = list((self.root / 'jobs').glob('*/case/case_manifest.json'))
+  self.assertEqual(len(manifests), 1)
+  partial_manifest = json.loads(manifests[0].read_text(encoding='utf-8'))
+  self.assertFalse(partial_manifest.get('complete', True))
+  self.assertEqual(len(partial_manifest['files']), 2)
+  # Now user restarts tool and opens the same folder again -> only file 3 should be prepared!
+  resumed_calls = []
+  def tracking_prepare(pdf_file, sub_job, *args, **kwargs):
+   resumed_calls.append(Path(pdf_file).name)
+   return orig_prepare(pdf_file, sub_job, *args, **kwargs)
+  with patch('engine.prepare', side_effect=tracking_prepare):
+   code, ok_res = self.req('POST', '/open_path', {'path': str(case_dir), 'study_id': 'RESUME_CASE'})
+   self.assertEqual(code, 200, ok_res)
+  self.assertEqual(resumed_calls, ['ho_so_03.pdf'])
+  self.assertEqual(len(ok_res['files']), 3)
+
+ def test_e2e_single_folder_session_lifecycle_with_real_logs(self):
+  """
+  Kiểm thử tích hợp End-to-End toàn bộ vòng đời phiên làm việc Folder đơn với log thực tế:
+  - Chặng 1: Sinh dữ liệu động thực tế (PDF nhiều trang với token ngẫu nhiên, không hardcode).
+  - Chặng 2: Mở folder và ngắt quãng giữa chừng khi đang quét (mô phỏng crash / tắt terminal),
+             kiểm chứng checkpoint manifest lưu lũy tiến (complete=False).
+  - Chặng 3: Khởi động quét tiếp (resume), kiểm chứng tái sử dụng các file đã OCR trước đó
+             và chỉ xử lý file còn lại (complete=True).
+  - Chặng 4: Duyệt từng file, từng trang, cập nhật note/rects và session metadata -> tắt terminal ->
+             lưu snapshot -> bật lại server và tự động đồng bộ khôi phục chính xác 100%.
+  """
+  import secrets, time, hashlib, sys
+  from unittest.mock import patch
+  import engine
+
+  def log(msg):
+   sys.stderr.write(f"\n[REAL-TEST-LOG] {msg}\n")
+   sys.stderr.flush()
+
+  # --- CHẶNG 1: KHỞI TẠO DỮ LIỆU ĐỘNG THỰC TẾ ---
+  run_token = secrets.token_hex(4)
+  case_name = f"ca_benh_dong_{run_token}"
+  case_dir = self.root / case_name
+  case_dir.mkdir(parents=True, exist_ok=True)
+  dest_dir = self.root / f"xuat_benh_an_{run_token}"
+  study_id = f"HMU_E2E_{secrets.token_hex(3).upper()}"
+
+  file_names = [
+   f"01_benh_an_{secrets.token_hex(2)}.pdf",
+   f"02_xet_nghiem_{secrets.token_hex(2)}.pdf",
+   f"03_chuan_doan_{secrets.token_hex(2)}.pdf"
+  ]
+  file_paths = []
+  file_hashes = {}
+  for idx, fn in enumerate(file_names, 1):
+   doc = fitz.open()
+   for p_idx in range(2):
+    page = doc.new_page(width=595, height=842)
+    page.insert_text((40, 60), f"BỆNH VIỆN ĐẠI HỌC Y HÀ NỘI - HỒ SƠ #{idx}")
+    page.insert_text((40, 100), f"Bệnh nhân: Bệnh nhân {idx} - Mã: {secrets.token_hex(3)}")
+    page.insert_text((40, 140), f"Trang {p_idx + 1}/2 - Thời gian tạo: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+   pdf_bytes = doc.tobytes()
+   doc.close()
+   fp = case_dir / fn
+   fp.write_bytes(pdf_bytes)
+   file_paths.append(fp)
+   file_hashes[fn] = hashlib.sha256(pdf_bytes).hexdigest()
+
+  log(f"[CHẶNG 1: CHỌN FOLDER DỮ LIỆU ĐỘNG]")
+  log(f"  - Thư mục ca bệnh: {case_dir}")
+  log(f"  - Thư mục đích dự kiến: {dest_dir}")
+  log(f"  - Mã đề tài nghiên cứu: {study_id}")
+  log(f"  - 3 tệp PDF tạo động thành công:")
+  for fn in file_names:
+   log(f"    * {fn} | SHA256: {file_hashes[fn][:16]}... | Kích thước: {len((case_dir / fn).read_bytes())} bytes")
+
+  # --- CHẶNG 2: NGẮT QUÃNG KHI ĐANG QUÉT ---
+  log(f"[CHẶNG 2: NGẮT QUÃNG GIỮA CHỪNG KHI ĐANG QUÉT]")
+  prepared_order = []
+  orig_prepare = engine.prepare
+  def interrupted_prepare(pdf_file, sub_job, *args, **kwargs):
+   pname = Path(pdf_file).name
+   prepared_order.append(pname)
+   if len(prepared_order) == 3:
+    log(f"  - [MÔ PHỎNG] Gặp sự cố đột ngột / tắt terminal khi đang OCR tệp thứ 3: {pname}")
+    raise RuntimeError(f"Terminal crash simulation on {pname}")
+   return orig_prepare(pdf_file, sub_job, *args, **kwargs)
+
+  with patch('engine.prepare', side_effect=interrupted_prepare):
+   code, err_res = self.req('POST', '/open_path', {
+    'path': str(case_dir),
+    'study_id': study_id,
+    'destination': str(dest_dir)
+   })
+   self.assertEqual(code, 400, err_res)
+   log(f"  - Server trả về mã lỗi 400 như kỳ vọng: {err_res}")
+
+  self.assertEqual(len(prepared_order), 3)
+  manifests = list((self.root / 'jobs').glob('*/case/case_manifest.json'))
+  self.assertEqual(len(manifests), 1, "Phải ghi checkpoint case_manifest.json ngay sau các file đầu")
+  checkpoint = json.loads(manifests[0].read_text(encoding='utf-8'))
+  self.assertFalse(checkpoint.get('complete', True), "Trạng thái complete trong checkpoint phải là False")
+  self.assertEqual(len(checkpoint['files']), 2, "Checkpoint phải lưu chính xác 2 file đã hoàn thành")
+  log(f"  - Checkpoint case_manifest.json đã ghi nhận:")
+  log(f"    * Hoàn tất (complete): {checkpoint['complete']}")
+  log(f"    * Số file đã chuẩn bị an toàn: {len(checkpoint['files'])} / {len(file_names)}")
+  log(f"    * Danh sách file đã lưu checkpoint: {[f['source_name'] for f in checkpoint['files']]}")
+
+  # --- CHẶNG 3: KHÔI PHỤC VÀ TIẾP TỤC QUÉT FOLDER ---
+  log(f"[CHẶNG 3: KHÔI PHỤC VÀ TIẾP TỤC QUÉT]")
+  resumed_order = []
+  def tracking_prepare(pdf_file, sub_job, *args, **kwargs):
+   pname = Path(pdf_file).name
+   resumed_order.append(pname)
+   return orig_prepare(pdf_file, sub_job, *args, **kwargs)
+
+  with patch('engine.prepare', side_effect=tracking_prepare):
+   code, ok_res = self.req('POST', '/open_path', {
+    'path': str(case_dir),
+    'study_id': study_id,
+    'destination': str(dest_dir)
+   })
+   self.assertEqual(code, 200, ok_res)
+
+  self.assertEqual(resumed_order, [file_names[2]], "Chỉ duy nhất tệp thứ 3 phải chuẩn bị lại, tệp 1 & 2 được tái sử dụng!")
+  self.assertEqual(len(ok_res['files']), 3)
+  final_checkpoint = json.loads(manifests[0].read_text(encoding='utf-8'))
+  self.assertTrue(final_checkpoint.get('complete'), "Manifest phải được cập nhật complete = True khi kết thúc")
+  log(f"  - Khôi phục mở folder thành công (code 200)")
+  log(f"  - Tệp được chuẩn bị bổ sung: {resumed_order}")
+  log(f"  - 2 tệp đầu được giữ nguyên vẹn từ sub_jobs trước đó, tiết kiệm 100% chi phí OCR lại.")
+  log(f"  - Case manifest hoàn thiện: complete = {final_checkpoint['complete']}, tổng số tệp = {len(final_checkpoint['files'])}")
+
+  # --- CHẶNG 4: DUYỆT TỪNG FILE/TRANG -> TẮT TERMINAL -> LƯU SNAPSHOT -> BẬT LẠI TỰ ĐỒNG BỘ ---
+  log(f"[CHẶNG 4: DUYỆT TỆP/TRANG -> LƯU SNAPSHOT -> KHỞI ĐỘNG LẠI TỰ ĐỒNG BỘ]")
+  # 4.1. Chuyển sang duyệt tệp 2, trang 2
+  code, st_f2 = self.req('POST', '/select_file', {**self.ident(ok_res['review']), 'file_index': 2})
+  self.assertEqual(code, 200, st_f2)
+  d2 = st_f2['review']
+  f2_name = next(f['name'] for f in st_f2.get('files', []) if f['index'] == 2)
+  log(f"  - Đã chọn tệp 2 ({f2_name}), job_id: {d2['job_id']}")
+
+  # Duyệt và lưu trang 2 của tệp 2
+  p2 = d2['pages'][1]
+  offline_note = f"Đã duyệt và khử định danh trang 2 tệp 2 - Token: {run_token}"
+  code, saved_p2 = self.req('POST', '/save_page', {
+   **self.ident(d2),
+   'page': 2,
+   'reviewed': True,
+   'manual_rects': [[15, 25, 120, 60]],
+   'note': offline_note,
+   'selections': [{'id': q['id'], 'selected': q['selected']} for q in p2['proposals']]
+  })
+  self.assertEqual(code, 200, saved_p2)
+  log(f"  - Đã lưu chỉnh sửa trang 2 (revision: {saved_p2['revision']}, reviewed: True, note: '{offline_note}')")
+
+  # Lưu session metadata
+  code, saved_sess = self.req('POST', '/session/save', {
+   'selected_path': str(case_dir),
+   'destination': str(dest_dir),
+   'study_id': study_id,
+   'active_file_index': 2,
+   'active_page': 2,
+   'whole_case': True
+  })
+  self.assertEqual(code, 200, saved_sess)
+  log(f"  - Đã cập nhật metadata phiên: active_file_index=2, active_page=2, destination={dest_dir}")
+
+  # 4.2. Giả lập tắt Terminal: dừng server hiện tại
+  log(f"  - [MÔ PHỎNG] Tắt Terminal (server dừng hoạt động)...")
+  self.server.shutdown()
+  self.server.server_close()
+  self.thread.join()
+
+  # Mô phỏng Web client lưu snapshot vào localStorage trước khi tắt hoặc khi server mất kết nối
+  client_snapshot = {
+   'saved_at': time.time(),
+   'selected_path': str(case_dir.resolve()),
+   'destination': str(dest_dir.resolve()),
+   'study_id': study_id,
+   'active_file_index': 2,
+   'active_page': 2,
+   'page_patch': {
+    'page': 2,
+    'reviewed': True,
+    'manual_rects': [[15, 25, 120, 60], [200, 250, 350, 280]],
+    'note': f"{offline_note} (Đồng bộ bổ sung khi kết nối lại)",
+    'selections': [{'id': q['id'], 'selected': q['selected']} for q in p2['proposals']]
+   }
+  }
+  log(f"  - Client lưu snapshot an toàn vào LocalStorage (hmu_session_backup_v1)")
+
+  # 4.3. Bật lại Server mới (mô phỏng người dùng bật lại công cụ qua MO_CONG_CU.bat)
+  log(f"  - [MÔ PHỎNG] Bật lại Terminal / Server mới...")
+  restarted = app.create_server(self.root / 'jobs', None, 0)
+  t_restarted = threading.Thread(target=restarted.serve_forever, daemon=True)
+  t_restarted.start()
+
+  try:
+   c = http.client.HTTPConnection('127.0.0.1', restarted.server_port, timeout=30)
+   c.request('GET', '/state')
+   r = c.getresponse()
+   st_reboot = json.loads(r.read())
+   new_token = st_reboot['token']
+   log(f"  - Kết nối lại thành công tới Server mới (Token: {new_token[:8]}...)")
+
+   # Kiểm tra Session tự động khôi phục chính xác
+   self.assertEqual(st_reboot['session']['selected_path'], str(case_dir.resolve()))
+   self.assertEqual(st_reboot['session']['destination'], str(dest_dir.resolve()))
+   self.assertEqual(st_reboot['session']['study_id'], study_id)
+   self.assertEqual(st_reboot['session']['active_file_index'], 2)
+   self.assertEqual(st_reboot['session']['active_page'], 2)
+   self.assertEqual(st_reboot['review']['job_id'], d2['job_id'])
+   log(f"  - Trạng thái phiên được Server tự động phục hồi hoàn hảo:")
+   log(f"    * selected_path: {st_reboot['session']['selected_path']}")
+   log(f"    * destination: {st_reboot['session']['destination']}")
+   log(f"    * active_file_index: {st_reboot['session']['active_file_index']}")
+   log(f"    * active_page: {st_reboot['session']['active_page']}")
+   log(f"    * job_id: {st_reboot['review']['job_id']}")
+
+   # Mô phỏng Web client tự động đồng bộ (syncOfflineSnapshotIfNeeded)
+   h_sync = {'X-HMU-Token': new_token}
+   sync_body = json.dumps({
+    'job_id': st_reboot['review']['job_id'],
+    'revision': st_reboot['review']['revision'],
+    **client_snapshot['page_patch']
+   }).encode()
+   c.request('POST', '/save_page', body=sync_body, headers=h_sync)
+   r_sync = c.getresponse()
+   self.assertEqual(r_sync.status, 200)
+   saved_sync = json.loads(r_sync.read())
+   self.assertTrue(saved_sync.get('saved'))
+   log(f"  - Tự động đồng bộ snapshot từ client lên Server thành công (Revision mới: {saved_sync['revision']})")
+
+   # Kiểm chứng lại /state cuối cùng
+   c.request('GET', '/state', headers=h_sync)
+   st_final = json.loads(c.getresponse().read())
+   c.close()
+
+   p2_verified = st_final['review']['pages'][1]
+   self.assertEqual(len(p2_verified['manual_rects']), 2)
+   self.assertIn("Đồng bộ bổ sung", p2_verified['note'])
+   self.assertTrue(p2_verified['reviewed'])
+   log(f"  - Xác nhận trang 2 tệp 2 đã cập nhật đầy đủ dữ liệu đồng bộ (2 manual rects, note chuẩn xác).")
+  finally:
+   restarted.shutdown()
+   restarted.server_close()
+   t_restarted.join()
+
+  # Khôi phục server gốc cho tearDown
+  self.server = app.create_server(self.root / 'jobs', None, 0)
+  self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+  self.thread.start()
+  log(f"[KẾT QUẢ] Hoàn thành kiểm thử tích hợp E2E vòng đời phiên Folder đơn: ĐẠT 100% TIÊU CHÍ.")
+
+ def test_update_endpoints_check_apply_rollback_and_conflict_guard(self):
+  import subprocess, time, os
+  from unittest.mock import patch
+  def _run_git(cwd, *args):
+   p = subprocess.run(['git', *args], cwd=cwd, capture_output=True, text=True, check=True)
+   return p.stdout.strip()
+
+  remote_dir = self.root / 'remote.git'
+  repo_dir = self.root / 'repo_clone'
+  _run_git(self.root, 'init', '--bare', str(remote_dir))
+  _run_git(self.root, 'clone', str(remote_dir), str(repo_dir))
+  _run_git(repo_dir, 'config', 'user.email', 'hmu_test@hmu.edu.vn')
+  _run_git(repo_dir, 'config', 'user.name', 'HMU Tester')
+  _run_git(repo_dir, 'checkout', '-b', 'dev')
+  (repo_dir / 'app.py').write_text('VERSION = "3.1.0"\n', encoding='utf-8')
+  (repo_dir / 'requirements.txt').write_text('pymupdf>=1.24.0\n', encoding='utf-8')
+  _run_git(repo_dir, 'add', 'app.py', 'requirements.txt')
+  _run_git(repo_dir, 'commit', '-m', 'feat: initial v3.1.0 release')
+  _run_git(repo_dir, 'tag', 'v3.1.0')
+  _run_git(repo_dir, 'push', '-u', 'origin', 'dev', '--tags')
+  v1_sha = _run_git(repo_dir, 'rev-parse', 'HEAD')
+
+  self.server.repo_dir = repo_dir
+
+  # 1. Kiểm tra GET /update/status
+  code_403, _ = self.req('GET', '/update/status', headers={'Host': 'bad.host'})
+  self.assertEqual(code_403, 403)
+
+  code, status_data = self.req('GET', '/update/status')
+  self.assertEqual(code, 200, status_data)
+  self.assertEqual(status_data['current']['commit'], v1_sha)
+  self.assertEqual(status_data['current']['short_commit'], v1_sha[:7])
+  self.assertEqual(status_data['current']['branch'], 'dev')
+  self.assertFalse(status_data['current']['can_rollback'])
+  self.assertTrue(any(t['name'] == 'v3.1.0' for t in status_data['versions']['tags']))
+
+  # 2. Kiểm tra POST /update/check
+  code_bad_tok, _ = self.req('POST', '/update/check', {}, headers={'X-HMU-Token': 'wrong_token'})
+  self.assertEqual(code_bad_tok, 403)
+
+  code, check_data = self.req('POST', '/update/check', {})
+  self.assertEqual(code, 200, check_data)
+  self.assertEqual(check_data['check']['behind'], 0)
+  self.assertFalse(check_data['check']['update_available'])
+
+  # Peer clone push v3.2.0
+  peer_dir = self.root / 'peer_clone'
+  _run_git(self.root, 'clone', '-b', 'dev', str(remote_dir), str(peer_dir))
+  _run_git(peer_dir, 'config', 'user.email', 'peer@hmu.edu.vn')
+  _run_git(peer_dir, 'config', 'user.name', 'HMU Peer')
+  (peer_dir / 'app.py').write_text('VERSION = "3.2.0"\n', encoding='utf-8')
+  _run_git(peer_dir, 'add', 'app.py')
+  _run_git(peer_dir, 'commit', '-m', 'feat: update v3.2.0 with updater endpoints')
+  _run_git(peer_dir, 'tag', 'v3.2.0')
+  _run_git(peer_dir, 'push', 'origin', 'dev', '--tags')
+  v2_sha = _run_git(peer_dir, 'rev-parse', 'HEAD')
+
+  code, check_data2 = self.req('POST', '/update/check', {})
+  self.assertEqual(code, 200, check_data2)
+  self.assertEqual(check_data2['check']['behind'], 1)
+  self.assertTrue(check_data2['check']['update_available'])
+  self.assertEqual(check_data2['check']['remote_commit'], v2_sha)
+  self.assertEqual(len(check_data2['check']['incoming_commits']), 1)
+
+  # 3. Khóa an toàn 409 Conflict
+  case, state = self.open_local_case()
+  d = state['review']
+  started = threading.Event()
+  release = threading.Event()
+  original_export = app.export_reviewed_folder
+  def slow_export(*args, **kwargs):
+   started.set()
+   release.wait(5)
+   return original_export(*args, **kwargs)
+
+  with patch.object(app, 'export_reviewed_folder', side_effect=slow_export):
+   code_async, res_async = self.req('POST', '/export_folder', {**self.ident(d), 'destination': str(self.root / 'delivery_guard')}, {'X-HMU-Async': '1'})
+   self.assertEqual(code_async, 202)
+   self.assertTrue(started.wait(2))
+   try:
+    code_conflict1, err1 = self.req('POST', '/update/apply', {'target': 'latest', 'restart': False})
+    self.assertEqual(code_conflict1, 409, err1)
+    self.assertIn('Đang xử lý', err1.get('error', ''))
+    code_conflict2, err2 = self.req('POST', '/update/rollback', {'restart': False})
+    self.assertEqual(code_conflict2, 409, err2)
+   finally:
+    release.set()
+
+  for _ in range(100):
+   p_state = self.req('GET', '/progress?task_id=' + res_async['task_id'])[1]
+   if p_state['status'] != 'running':
+    break
+   time.sleep(0.02)
+
+  # Batch coordinator active > 0
+  coord_file = self.root / 'jobs' / 'batch' / 'coordinator_status.json'
+  coord_file.parent.mkdir(parents=True, exist_ok=True)
+  coord_file.write_text(json.dumps({'active': 3, 'running': True, 'heartbeat': time.time()}), encoding='utf-8')
+  try:
+   code_batch_conflict, err_batch = self.req('POST', '/update/apply', {'target': 'latest', 'restart': False})
+   self.assertEqual(code_batch_conflict, 409, err_batch)
+   self.assertIn('Đang xử lý', err_batch.get('error', ''))
+  finally:
+   coord_file.write_text(json.dumps({'active': 0, 'running': False}), encoding='utf-8')
+
+  # 4. POST /update/apply (áp dụng bản mới)
+  code_apply, res_apply = self.req('POST', '/update/apply', {'target': 'latest', 'restart': False, 'run_pip': False, 'run_smoke_test': False})
+  self.assertEqual(code_apply, 200, res_apply)
+  self.assertEqual(res_apply['result']['status'], 'switched')
+  self.assertEqual(res_apply['result']['to_commit'], v2_sha)
+  self.assertFalse(res_apply['restarting'])
+  self.assertEqual(_run_git(repo_dir, 'rev-parse', 'HEAD'), v2_sha)
+
+  # Kiểm tra session_path được save_session ghi nhận
+  session_file = self.root / 'jobs' / 'last_session.json'
+  self.assertTrue(session_file.exists())
+
+  # 5. POST /update/rollback
+  code_rollback, res_rollback = self.req('POST', '/update/rollback', {'restart': False, 'run_pip': False, 'run_smoke_test': False})
+  self.assertEqual(code_rollback, 200, res_rollback)
+  self.assertEqual(res_rollback['result']['to_commit'], v1_sha)
+  self.assertEqual(_run_git(repo_dir, 'rev-parse', 'HEAD'), v1_sha)
+
+  # 6. POST /update/apply với restart=True
+  with patch('threading.Timer') as mock_timer:
+   code_restart_apply, res_restart = self.req('POST', '/update/apply', {'target': 'v3.2.0', 'restart': True, 'run_pip': False, 'run_smoke_test': False})
+   self.assertEqual(code_restart_apply, 200)
+   self.assertTrue(res_restart['restarting'])
+   self.assertTrue(getattr(self.server, 'restart_requested', False))
+   self.assertTrue(mock_timer.called)
+   self.server.restart_requested = False
+
+ def test_main_restart_lifecycle_exits_with_code_42(self):
+  import sys
+  from unittest.mock import patch, MagicMock
+
+  mock_server = MagicMock()
+  mock_server.server_port = 8765
+  mock_server.restart_requested = True
+  mock_server.serve_forever.return_value = None
+
+  test_root = self.root / 'main_test_jobs'
+  test_root.mkdir(parents=True, exist_ok=True)
+
+  with patch.object(app, 'create_server', return_value=mock_server):
+   with patch.object(sys, 'argv', ['app.py', '--root', str(test_root), '--no-browser']):
+    with self.assertRaises(SystemExit) as ctx:
+     app.main()
+    self.assertEqual(ctx.exception.code, 42)
+
+  mock_server.restart_requested = False
+  with patch.object(app, 'create_server', return_value=mock_server):
+   with patch.object(sys, 'argv', ['app.py', '--root', str(test_root), '--no-browser']):
+    app.main()
+
+ def test_e2e_git_update_and_rollback_lifecycle_with_real_logs(self):
+  import subprocess, time, os, hashlib
+  def _run_git(cwd, *args):
+   p = subprocess.run(['git', *args], cwd=cwd, capture_output=True, text=True, check=True)
+   return p.stdout.strip()
+
+  def log(msg):
+   print(f"[E2E-UPDATE-LIFECYCLE] {msg}", flush=True)
+
+  log("================================================================================")
+  log("BẮT ĐẦU KIỂM THỬ E2E: VÒNG ĐỜI CẬP NHẬT VÀ ROLLBACK GIT TRÊN MÁY NGƯỜI DÙNG")
+  log("================================================================================")
+
+  # Dọn dẹp server mặc định của setUp để chuyển sang server gắn repo clone thực tế
+  self.server.shutdown()
+  self.server.server_close()
+  self.thread.join()
+
+  # Thiết lập môi trường Git thật: Remote bare repo và Workstation clone
+  remote_dir = self.root / 'remote.git'
+  repo_dir = self.root / 'user_workstation'
+  _run_git(self.root, 'init', '--bare', str(remote_dir))
+  _run_git(self.root, 'clone', str(remote_dir), str(repo_dir))
+  _run_git(repo_dir, 'config', 'user.email', 'bacsi_hmu@hmu.edu.vn')
+  _run_git(repo_dir, 'config', 'user.name', 'BS. Nguyen Van HMU')
+  _run_git(repo_dir, 'checkout', '-b', 'dev')
+
+  # Khởi tạo commit gốc v3.1.0
+  (repo_dir / 'app.py').write_text('VERSION = "3.1.0"\n# HMU App Server\n', encoding='utf-8')
+  (repo_dir / 'requirements.txt').write_text('pymupdf>=1.24.0\n', encoding='utf-8')
+  _run_git(repo_dir, 'add', 'app.py', 'requirements.txt')
+  _run_git(repo_dir, 'commit', '-m', 'feat: v3.1.0 initial release for clinical review')
+  _run_git(repo_dir, 'tag', 'v3.1.0')
+  _run_git(repo_dir, 'push', '-u', 'origin', 'dev', '--tags')
+  v310_sha = _run_git(repo_dir, 'rev-parse', 'HEAD')
+  log(f"[GIAI ĐOẠN 1] Khởi tạo máy trạm người dùng tại phiên bản v3.1.0 (Commit: {v310_sha[:7]})")
+
+  # Khởi tạo thư mục dữ liệu HMU_JOBS nằm ngay bên trong repo của người dùng
+  jobs_dir = repo_dir / 'HMU_JOBS'
+  jobs_dir.mkdir(parents=True, exist_ok=True)
+
+  # Khởi động server gắn với repo clone và thư mục dữ liệu thực tế
+  self.server = app.create_server(jobs_dir, None, 0)
+  self.server.repo_dir = repo_dir
+  self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+  self.thread.start()
+  self.token = self.req('GET', '/state')[1]['token']
+  log(f"  - Server HMU đã khởi động tại cổng {self.server.server_port}, liên kết với Git repo: {repo_dir.name}")
+
+  try:
+   # Tạo ca bệnh PDF thực tế và mở qua /open_path
+   case_dir = self.root / 'benh_an_thuc_te'
+   case_dir.mkdir(parents=True, exist_ok=True)
+   real_pdf_path = case_dir / 'ho_so_benh_an_nguyen_van_a.pdf'
+   doc = fitz.open()
+   page = doc.new_page(width=595, height=842)
+   page.insert_text((50, 100), "BỆNH VIỆN ĐẠI HỌC Y HÀ NỘI - KHOA CẤP CỨU")
+   page.insert_text((50, 130), "Họ và tên bệnh nhân: Nguyễn Văn A  -  Năm sinh: 1985")
+   page.insert_text((50, 160), "Chẩn đoán ban đầu: Viêm phổi thùy cấp tính")
+   page.insert_text((50, 190), "Bác sĩ chỉ định: PGS.TS Trần Văn B")
+   doc.save(str(real_pdf_path))
+   doc.close()
+
+   log(f"[GIAI ĐOẠN 2] Bác sĩ đang duyệt 1 hồ sơ PDF thực tế: {real_pdf_path.name}")
+   code, open_res = self.req('POST', '/open_path', {'path': str(case_dir), 'study_id': 'BENH_AN_001'})
+   self.assertEqual(code, 200, open_res)
+   init_review = open_res['review']
+   initial_job_id = init_review['job_id']
+   log(f"  - Đã nạp thành công ca bệnh: job_id = {initial_job_id}")
+
+   # Bác sĩ thực hiện khử định danh trên trang 1 và lưu lại
+   clinical_note = "Đã che thông tin định danh họ tên bệnh nhân và bác sĩ chỉ định"
+   code, save_res = self.req('POST', '/save_page', {
+    **self.ident(init_review),
+    'page': 1,
+    'reviewed': True,
+    'manual_rects': [[50, 120, 350, 140], [50, 180, 300, 200]],
+    'note': clinical_note,
+    'selections': [],
+   })
+   self.assertEqual(code, 200, save_res)
+   log(f"  - Bác sĩ đã lưu duyệt trang 1 (revision {save_res['revision']}): manual_rects = 2 vùng, note = '{clinical_note}'")
+
+   # Đọc trạng thái ban đầu của ca bệnh và dữ liệu trong HMU_JOBS
+   code, state_before = self.req('GET', '/state')
+   self.assertEqual(code, 200)
+   self.assertEqual(state_before['review']['job_id'], initial_job_id)
+   self.assertEqual(state_before['review']['pages'][0]['reviewed'], True)
+   files_before = {p.relative_to(jobs_dir): p.stat().st_size for p in jobs_dir.rglob('*') if p.is_file()}
+   log(f"  - Snapshot dữ liệu HMU_JOBS/ ban đầu: {len(files_before)} tệp ghi nhận (bệnh án, manifest, SQLite DB)")
+
+   # Giai đoạn 3: Developer đẩy v3.1.1 và v3.2.0 lên Git remote
+   log(f"[GIAI ĐOẠN 3] Developer push 2 phiên bản v3.1.1 và v3.2.0 lên remote Git")
+   dev_dir = self.root / 'dev_workstation'
+   _run_git(self.root, 'clone', '-b', 'dev', str(remote_dir), str(dev_dir))
+   _run_git(dev_dir, 'config', 'user.email', 'dev_team@hmu.edu.vn')
+   _run_git(dev_dir, 'config', 'user.name', 'HMU Dev Team')
+
+   # Commit & Tag v3.1.1
+   (dev_dir / 'app.py').write_text('VERSION = "3.1.1"\n# HMU App Server - v3.1.1 patch release\n', encoding='utf-8')
+   (dev_dir / 'release_v311.txt').write_text('Bản vá lỗi v3.1.1: Tối ưu bộ nhớ đệm OCR\n', encoding='utf-8')
+   _run_git(dev_dir, 'add', 'app.py', 'release_v311.txt')
+   _run_git(dev_dir, 'commit', '-m', 'fix: patch release v3.1.1 cache optimization')
+   _run_git(dev_dir, 'tag', 'v3.1.1')
+   _run_git(dev_dir, 'push', 'origin', 'dev', '--tags')
+   v311_sha = _run_git(dev_dir, 'rev-parse', 'HEAD')
+   log(f"  - Đã push Tag v3.1.1 (Commit: {v311_sha[:7]})")
+
+   # Commit & Tag v3.2.0
+   (dev_dir / 'app.py').write_text('VERSION = "3.2.0"\n# HMU App Server - v3.2.0 major release\n', encoding='utf-8')
+   (dev_dir / 'release_v320.txt').write_text('Phiên bản v3.2.0: Hệ thống xử lý hàng loạt Batch Queue đa tiến trình\n', encoding='utf-8')
+   _run_git(dev_dir, 'add', 'app.py', 'release_v320.txt')
+   _run_git(dev_dir, 'commit', '-m', 'feat: major release v3.2.0 multi-process batch coordinator')
+   _run_git(dev_dir, 'tag', 'v3.2.0')
+   _run_git(dev_dir, 'push', 'origin', 'dev', '--tags')
+   v320_sha = _run_git(dev_dir, 'rev-parse', 'HEAD')
+   log(f"  - Đã push Tag v3.2.0 (Commit: {v320_sha[:7]} - latest dev HEAD)")
+
+   # Giai đoạn 4: Máy người dùng phát sinh chỉnh sửa cục bộ (dirty files), gọi /update/check
+   log(f"[GIAI ĐOẠN 4] Máy người dùng phát sinh chỉnh sửa cục bộ và kiểm tra cập nhật")
+   (repo_dir / 'app.py').write_text('VERSION = "3.1.0"\n# Bac si sua file cuc bo tren may tram\n', encoding='utf-8')
+   (repo_dir / 'bac_si_ghi_chu.txt').write_text('Ghi chú cục bộ chưa được commit\n', encoding='utf-8')
+   log(f"  - Đã tạo thay đổi bẩn (dirty): sửa app.py và thêm bac_si_ghi_chu.txt")
+
+   code, check_res = self.req('POST', '/update/check', {})
+   self.assertEqual(code, 200, check_res)
+   check_info = check_res['check']
+   self.assertTrue(check_info['update_available'], "Hệ thống phải phát hiện có bản cập nhật mới")
+   self.assertEqual(check_info['behind'], 2, "Hệ thống phải phát hiện đang đi sau 2 commits")
+   self.assertTrue(check_info['current']['dirty'], "Hệ thống phải nhận diện được working tree đang dirty")
+   self.assertEqual(len(check_info['incoming_commits']), 2)
+   tag_names = [t['name'] for t in check_res['versions']['tags']]
+   self.assertIn('v3.1.1', tag_names)
+   self.assertIn('v3.2.0', tag_names)
+   log(f"  - /update/check phản hồi: behind = {check_info['behind']}, update_available = {check_info['update_available']}")
+   log(f"  - Danh sách commits mới: {[c['subject'] for c in check_info['incoming_commits']]}")
+   log(f"  - Danh sách tags: {tag_names}")
+
+   # Giai đoạn 5: Áp dụng bản cập nhật v3.1.1 theo Tag
+   log(f"[GIAI ĐOẠN 5] Cập nhật lên Tag v3.1.1 (/update/apply)")
+   code, apply_311 = self.req('POST', '/update/apply', {
+    'target': 'v3.1.1',
+    'restart': False,
+    'run_pip': False,
+    'run_smoke_test': False,
+   })
+   self.assertEqual(code, 200, apply_311)
+   self.assertEqual(apply_311['result']['status'], 'switched')
+   self.assertEqual(apply_311['result']['to_commit'], v311_sha)
+   self.assertTrue(apply_311['result']['stashed'], "Phải tự động stash các thay đổi bẩn cục bộ")
+   self.assertEqual(_run_git(repo_dir, 'rev-parse', 'HEAD'), v311_sha)
+   self.assertTrue((repo_dir / 'release_v311.txt').exists())
+   self.assertFalse((repo_dir / 'release_v320.txt').exists())
+   log(f"  - Chuyển thành công sang Tag v3.1.1 (Commit: {v311_sha[:7]}), file release_v311.txt xuất hiện")
+
+   # Giai đoạn 6: Cập nhật lên bản mới nhất v3.2.0 (target='latest')
+   log(f"[GIAI ĐOẠN 6] Cập nhật lên bản mới nhất latest / v3.2.0 (/update/apply)")
+   code, apply_latest = self.req('POST', '/update/apply', {
+    'target': 'latest',
+    'restart': False,
+    'run_pip': False,
+    'run_smoke_test': False,
+   })
+   self.assertEqual(code, 200, apply_latest)
+   self.assertEqual(apply_latest['result']['status'], 'switched')
+   self.assertEqual(apply_latest['result']['to_commit'], v320_sha)
+   self.assertEqual(_run_git(repo_dir, 'rev-parse', 'HEAD'), v320_sha)
+   self.assertEqual(_run_git(repo_dir, 'rev-parse', '--abbrev-ref', 'HEAD'), 'dev', "Phải thoát Detached HEAD về nhánh dev")
+   self.assertTrue((repo_dir / 'release_v320.txt').exists())
+   log(f"  - Cập nhật thành công lên latest v3.2.0 (Commit: {v320_sha[:7]}), nhánh: dev, release_v320.txt xuất hiện")
+
+   # Giai đoạn 7: Quay lui (Rollback) lùi về v3.1.1
+   log(f"[GIAI ĐOẠN 7] Quay lui (Rollback) lùi về phiên bản trước đó v3.1.1 (/update/rollback)")
+   code, rollback_res = self.req('POST', '/update/rollback', {
+    'restart': False,
+    'run_pip': False,
+    'run_smoke_test': False,
+   })
+   self.assertEqual(code, 200, rollback_res)
+   self.assertEqual(rollback_res['result']['to_commit'], v311_sha, "Rollback phải lùi về chính xác commit của v3.1.1")
+   self.assertEqual(_run_git(repo_dir, 'rev-parse', 'HEAD'), v311_sha)
+   self.assertTrue((repo_dir / 'release_v311.txt').exists())
+   self.assertFalse((repo_dir / 'release_v320.txt').exists(), "File phiên bản v3.2.0 phải biến mất sau khi rollback")
+   log(f"  - Rollback thành công về v3.1.1 (Commit: {v311_sha[:7]}), release_v320.txt đã gỡ bỏ an toàn")
+
+   # Giai đoạn 8: Kiểm chứng 100% toàn vẹn dữ liệu ca bệnh và phiên làm việc
+   log(f"[GIAI ĐOẠN 8] Xác nhận tính toàn vẹn 100% dữ liệu ca bệnh trong HMU_JOBS/ và phiên GET /state")
+   code, state_after = self.req('GET', '/state')
+   self.assertEqual(code, 200, state_after)
+   self.assertIsNotNone(state_after.get('review'), "Phiên duyệt bệnh án phải còn nguyên vẹn")
+   self.assertEqual(state_after['review']['job_id'], initial_job_id)
+   self.assertEqual(state_after['review']['pages'][0]['reviewed'], True)
+   self.assertEqual(state_after['review']['pages'][0]['note'], clinical_note)
+   self.assertEqual(state_after['review']['pages'][0]['manual_rects'], [[50, 120, 350, 140], [50, 180, 300, 200]])
+
+   # Kiểm tra các file quan trọng trong HMU_JOBS/
+   updater_state_file = jobs_dir / 'updater_state.json'
+   self.assertTrue(updater_state_file.exists(), "Tệp updater_state.json phải tồn tại trong HMU_JOBS/")
+   up_data = json.loads(updater_state_file.read_text(encoding='utf-8'))
+   self.assertEqual(up_data['current_commit'], v311_sha)
+   self.assertEqual(len(up_data.get('history', [])), 3, "Lịch sử cập nhật phải ghi nhận đủ 3 lần chuyển: v3.1.1 -> v3.2.0 -> rollback v3.1.1")
+
+   session_file = jobs_dir / 'last_session.json'
+   self.assertTrue(session_file.exists(), "Tệp last_session.json phải tồn tại trong HMU_JOBS/")
+
+   case_manifests = list(jobs_dir.rglob('case_manifest.json'))
+   self.assertTrue(len(case_manifests) >= 1, "case_manifest.json phải nguyên vẹn trong HMU_JOBS/")
+
+   # Đảm bảo không có bất kỳ file PDF hay ảnh nào của bệnh nhân trong HMU_JOBS/ bị thất thoát
+   for rel_p, orig_size in files_before.items():
+    if rel_p.name in {'last_session.json', 'updater_state.json'}:
+     continue
+    cur_p = jobs_dir / rel_p
+    self.assertTrue(cur_p.exists(), f"Tệp ca bệnh {rel_p} bị mất trong HMU_JOBS/!")
+    self.assertEqual(cur_p.stat().st_size, orig_size, f"Kích thước tệp ca bệnh {rel_p} bị biến đổi!")
+
+   log(f"  - Toàn bộ {len(files_before)} tệp ca bệnh gốc, ảnh trang và manifest được bảo toàn 100%.")
+   log(f"  - Phiên duyệt bệnh án (job_id: {initial_job_id}, ghi chú, vùng che) khớp 100% với trước khi cập nhật.")
+   log(f"  - Lịch sử updater_state.json: {len(up_data['history'])} lượt chuyển giao an toàn.")
+   log("================================================================================")
+   log("KẾT LUẬN: BÀI TEST E2E ĐẠT 100% TIÊU CHÍ VÒNG ĐỜI UPDATE/ROLLBACK TRÊN DỮ LIỆU THẬT")
+   log("================================================================================")
+
+  finally:
+   # Dọn dẹp và khôi phục server gốc cho tearDown
+   try:
+    self.server.shutdown()
+    self.server.server_close()
+    self.thread.join()
+   except Exception:
+    pass
+   self.server = app.create_server(self.root / 'jobs', None, 0)
+   self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+   self.thread.start()
+
+
 
 if __name__=='__main__':unittest.main()

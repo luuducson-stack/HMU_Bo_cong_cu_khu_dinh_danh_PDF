@@ -397,5 +397,79 @@ class BatchTests(unittest.TestCase):
         self.assertEqual(self.batch.get_job(self.db, ids[2])['duplicate_of'], ids[0])
         self.assertEqual(self.batch.get_job(self.db, ids[3])['state'], 'FAILED')
 
+    def test_enqueue_failed_files_preserve_distinct_root_causes_and_error_detail(self):
+        self.db = self.root / 'jobs' / 'batch' / 'queue.sqlite3'
+        corrupt = self.root / 'corrupt.pdf'
+        corrupt.write_bytes(b'not a pdf at all')
+        empty = self.root / 'empty.pdf'
+        empty.write_bytes(b'%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 0/Kids[]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF')
+        encrypted = self.root / 'encrypted.pdf'
+        with fitz.open() as doc:
+            doc.new_page().insert_text((20, 40), 'Secret')
+            doc.save(encrypted, encryption=fitz.PDF_ENCRYPT_AES_256, owner_pw='own', user_pw='usr')
+
+        ids = self.batch.enqueue(self.db, [corrupt, empty, encrypted])
+        summaries = {r['id']: r for r in self.batch.list_jobs(self.db, details=False)}
+        errors = [summaries[i]['error'] for i in ids]
+        self.assertEqual(len(set(errors)), 3, f'Expected 3 distinct errors, got: {errors}')
+        for i in ids:
+            detail = summaries[i]['result'].get('error_detail')
+            self.assertIsNotNone(detail, f'Missing error_detail in summary for {i}')
+            self.assertTrue(detail.get('root_cause'), f'Missing root_cause in error_detail for {i}')
+        self.assertIn('Empty PDF', summaries[ids[1]]['error'])
+        self.assertIn('Encrypted PDF', summaries[ids[2]]['error'])
+        self.assertTrue((self.root / 'jobs' / 'error_report.json').is_file())
+
+    def test_reap_active_workers_extracts_worker_log_tail_when_error_json_missing(self):
+        from unittest.mock import MagicMock
+        self.db = self.root / 'jobs' / 'batch' / 'queue.sqlite3'
+        ident = self.batch.enqueue(self.db, [self.pdf()])[0]
+        row = self.batch.claim_next(self.db)
+        with self.batch._db(self.db) as con:
+            con.execute('UPDATE jobs SET attempts=? WHERE id=?', (self.batch.QueueLimits.MAX_ATTEMPTS, ident))
+        row = self.batch.get_job(self.db, ident)
+        work_dir = Path(row['job_dir'])
+        work_dir.mkdir(parents=True, exist_ok=True)
+        log_file = work_dir / 'worker_crashlog123.log'
+        log_file.write_text(
+            'Traceback (most recent call last):\n'
+            '  File "batch_worker.py", line 85, in main\n'
+            'MemoryError: Unable to allocate 512 MiB for pixmap buffer\n',
+            encoding='utf8',
+        )
+        fake_proc = MagicMock()
+        fake_proc.process.poll.return_value = 1
+        active = {ident: {'process': fake_proc, 'attempt_id': 'crashlog123', 'started': 0.0}}
+        self.batch._reap_active_workers(self.db, active, {ident: row}, timeout_seconds=900)
+        updated = self.batch.get_job(self.db, ident)
+        self.assertEqual(updated['state'], 'FAILED')
+        self.assertIn('MemoryError: Unable to allocate 512 MiB for pixmap buffer', updated['error'])
+        self.assertIn('MemoryError', updated['result']['error_detail'].get('root_cause', ''))
+
+    def test_retry_job_and_retry_jobs_handle_repaired_file_and_update_pages(self):
+        broken = self.root / 'repaired_later.pdf'
+        broken.write_bytes(b'corrupt initial bytes')
+        ident = self.batch.enqueue(self.db, [broken])[0]
+        self.assertEqual(self.batch.get_job(self.db, ident)['state'], 'FAILED')
+        self.assertEqual(self.batch.get_job(self.db, ident)['pages'], 0)
+
+        # User repairs the file on disk and retries via bulk retry_jobs
+        with fitz.open() as doc:
+            doc.new_page().insert_text((20, 40), 'Page 1 repaired')
+            doc.new_page().insert_text((20, 40), 'Page 2 repaired')
+            doc.save(broken)
+
+        res = self.batch.retry_jobs(self.db, [ident])
+        self.assertEqual(res['retried'], [ident])
+        retried_row = self.batch.get_job(self.db, ident)
+        self.assertEqual(retried_row['state'], 'QUEUED')
+        self.assertEqual(retried_row['pages'], 2)
+        self.assertEqual(retried_row['error'], '')
+        claimed = self.batch.claim_next(self.db)
+        self.assertEqual(claimed['id'], ident)
+        # Ensure snapshot_source succeeds with updated sha256
+        snap = self.batch.snapshot_source(claimed)
+        self.assertTrue(snap.is_file())
+
 
 if __name__=='__main__':unittest.main()

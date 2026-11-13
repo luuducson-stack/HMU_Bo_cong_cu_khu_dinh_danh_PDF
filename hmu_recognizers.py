@@ -71,7 +71,8 @@ ADDRESS_BAD_PREFIXES = (
     "mã hồ sơ", "mã bệnh", "bác sĩ", "bác sỹ", "huyện (q", "tỉnh, thành phố"
 )
 
-ICD_RE = re.compile(r"(?i)\b[A-Z]\s*\d{2}(?:\s*[.]\s*\d{1,2})?\b")
+# Blanks inside a code stay on one line (OCR may write "C 34"); a trailing "/04", "-04", ".04" or "tháng" means it is a date.
+ICD_RE = re.compile(r"(?i)\b[A-Z][ \t]*\d{2}(?:[ \t]*[.][ \t]*\d{1,2})?\b(?!\s*[/\-]\s*\d|\.\d|\s*th[aáàảãạ]ng\b)")
 LAB_RE = re.compile(r"(?i)\b(?:pH|pCO2|pO2|HCO3|FiO2|SO2|MetHb|Hb|WBC|RBC|PLT|CRP|ALT|AST|GGT|Na|K|Cl|Creatinin|Glucose)\b")
 MEASURE_RE = re.compile(r"(?i)\b\d+(?:[.,]\d+)?\s*(?:mg|g|ml|mmol/L|µmol/L|umol/L|mmHg|cm|mm|kg|°C|%)\b")
 LIS_RE = re.compile(r"(?i)\bLIS\s*:\s*\d+\b")

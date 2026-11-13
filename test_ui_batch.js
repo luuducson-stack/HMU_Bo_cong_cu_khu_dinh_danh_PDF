@@ -210,5 +210,137 @@ const sent=[];vm.runInContext('loadBatchQcOriginal=loadBatchQc',ctx);ctx.fetch=a
  assert.equal(stateCalledOnReconnect, false, 'normal online poll must not fetch /state again');
  assert.equal(toastBox.children.length, toastsBeforeOffline + 2, 'normal online poll must not emit toast');
 
+ // 5. Issue 2: 8 different failed jobs must display 8 distinct root-cause error messages in both toasts and batch rows
+ const eightFailedJobs = Array.from({ length: 8 }, (_, idx) => ({
+   id: 'fail_8_' + idx,
+   state: 'FAILED',
+   source_name: `benh_an_${idx + 1}.pdf`,
+   source_path: `E:/HoSo/benh_an_${idx + 1}.pdf`,
+   pages: idx % 2,
+   updated: 500 + idx,
+   error: `Worker stopped with exit 1`,
+   error_detail: {
+     category: idx < 4 ? 'FILE_ERROR' : 'CODE_ERROR',
+     stage: idx < 4 ? 'BATCH_ENQUEUE' : 'BATCH_WORKER',
+     source_file: `benh_an_${idx + 1}.pdf`,
+     error_type: `SpecificErrorType${idx + 1}`,
+     message: `Lỗi riêng biệt số ${idx + 1}`,
+     root_cause: `RootCause_${idx + 1}: Chi tiết gốc lỗi tại file số ${idx + 1}`,
+     code_location: { file: 'engine.py', line: 100 + idx, function: `step_${idx + 1}` }
+   }
+ }));
+ const errBeforeEight = errToasts().length;
+ ctx.fetch = async (path) => {
+   if (path === '/batch/status') return { ok: true, json: async () => ({ jobs: eightFailedJobs, coordinator: { running: false } }) };
+   throw Error('Unexpected path: ' + path);
+ };
+ vm.runInContext("$('batchFilter').value='FAILED'", ctx);
+ await vm.runInContext("refreshBatch()", ctx);
+ assert.equal(errToasts().length, errBeforeEight + 8, '8 failed jobs must emit 8 error toasts');
+ const lastEightToastTexts = errToasts().slice(-8).map(t => t.textContent);
+ assert.equal(new Set(lastEightToastTexts).size, 8, 'All 8 error toasts must be distinct and show their specific root cause');
+ for (let i = 0; i < 8; i++) {
+   assert.ok(lastEightToastTexts[i].includes(`RootCause_${i + 1}`), `Toast ${i + 1} must include RootCause_${i + 1}, got: ${lastEightToastTexts[i]}`);
+ }
+ const renderedRowTexts = elements.get('batchList').children.map(row => row.children[1]?.textContent || '');
+ assert.equal(renderedRowTexts.length, 8, 'All 8 failed rows must be rendered under FAILED filter');
+ assert.equal(new Set(renderedRowTexts).size, 8, 'All 8 batch list rows must display distinct root causes');
+ for (let i = 0; i < 8; i++) {
+   assert.ok(renderedRowTexts[i].includes(`RootCause_${i + 1}`), `Row ${i + 1} must include RootCause_${i + 1}, got: ${renderedRowTexts[i]}`);
+ }
+
+ // 6. Issue 1: Filtering by FAILED, selecting failed files, and clicking "Thử lại đã chọn" (#batchRetrySelected)
+ // keeps retried files visible under FAILED filter and auto-opens the file onto the viewer when NEEDS_REVIEW
+ vm.runInContext("batchSelected.clear();$('batchFilter').value='FAILED'", ctx);
+ const retryJobsState = [
+   {
+     id: 'retry_f1',
+     state: 'FAILED',
+     source_name: 'loi_mo_file_1.pdf',
+     source_path: 'E:/HoSo/loi_mo_file_1.pdf',
+     pages: 0,
+     can_open: false,
+     updated: 701,
+     error: 'PDF hỏng (Gốc lỗi: FileDataError: broken xref)'
+   },
+   {
+     id: 'retry_f2',
+     state: 'FAILED',
+     source_name: 'loi_qc_2.pdf',
+     source_path: 'E:/HoSo/loi_qc_2.pdf',
+     pages: 1,
+     can_open: true,
+     updated: 702,
+     error: 'QC thất bại'
+   }
+ ];
+ ctx.fetch = async (path) => ({ ok: true, json: async () => ({ jobs: retryJobsState, coordinator: { running: false } }) });
+ await vm.runInContext("refreshBatch()", ctx);
+ vm.runInContext("$('batchSelectAll').onclick()", ctx);
+ assert.equal(elements.get('batchRetrySelected').disabled, false, 'batchRetrySelected must be enabled when failed rows are selected');
+
+ const retryCalls = [];
+ let autoOpenedQueueId = null;
+ ctx.fetch = async (path, opts) => {
+   const body = opts && opts.body ? JSON.parse(opts.body) : null;
+   retryCalls.push([path, body]);
+   if (path === '/batch/retry') {
+     // Transition retry_f1 -> QUEUED and retry_f2 -> NEEDS_REVIEW
+     retryJobsState[0].state = 'QUEUED';
+     retryJobsState[0].pages = 1;
+     retryJobsState[0].error = '';
+     retryJobsState[1].state = 'NEEDS_REVIEW';
+     retryJobsState[1].error = '';
+     return { ok: true, json: async () => ({ queued: true, retried: ['retry_f1', 'retry_f2'] }) };
+   }
+   if (path === '/batch/status') {
+     return { ok: true, json: async () => ({ jobs: retryJobsState, coordinator: { running: true, active: 1 } }) };
+   }
+   if (path === '/batch/open_job') {
+     autoOpenedQueueId = body.queue_id;
+     return {
+       ok: true,
+       json: async () => ({
+         review: { job_id: 'rev_' + body.queue_id, revision: 0, pages: [{ page: 1, width: 100, height: 100, reviewed: false, proposals: [], manual_rects: [] }], watermarks_removed: [] },
+         queue_id: body.queue_id,
+         files: []
+       })
+     };
+   }
+   throw Error('Unexpected path during retry: ' + path);
+ };
+ vm.runInContext("dirty=false;data=null;queueId=null", ctx);
+ await vm.runInContext("$('batchRetrySelected').onclick()", ctx);
+ assert.equal(retryCalls[0][0], '/batch/retry', 'batchRetrySelected must POST to /batch/retry');
+ assert.deepEqual(retryCalls[0][1].queue_ids, ['retry_f1', 'retry_f2'], 'batchRetrySelected must send selected queue_ids');
+ // Both retried rows must stay visible in #batchList even though filter is still FAILED!
+ assert.equal(elements.get('batchList').children.length, 2, 'Retried jobs must remain visible under FAILED filter so user can track & open them');
+ assert.equal(autoOpenedQueueId, 'retry_f2', 'Retried job reaching NEEDS_REVIEW must automatically open on viewer canvas to test');
+
+ // 7. Direct "Mở thử" button on a FAILED row without review.json opens source_path via /open_path for testing
+ let openPathPayload = null;
+ retryJobsState[0].state = 'FAILED';
+ retryJobsState[0].can_open = false;
+ ctx.fetch = async (path, opts) => {
+   const body = opts && opts.body ? JSON.parse(opts.body) : null;
+   if (path === '/batch/status') return { ok: true, json: async () => ({ jobs: retryJobsState, coordinator: { running: false } }) };
+   if (path === '/open_path') {
+     openPathPayload = body;
+     return {
+       ok: true,
+       json: async () => ({
+         async: false,
+         review: { job_id: 'local_test_job', revision: 0, pages: [{ page: 1, width: 100, height: 100, reviewed: false, proposals: [], manual_rects: [] }], watermarks_removed: [] },
+         files: []
+       })
+     };
+   }
+   throw Error('Unexpected path during testFailedBatchFile: ' + path);
+ };
+ await vm.runInContext("refreshBatch()", ctx);
+ await vm.runInContext("testFailedBatchFile(batchRows[0])", ctx);
+ assert.ok(openPathPayload, 'testFailedBatchFile must call /open_path when can_open is false');
+ assert.equal(openPathPayload.path, 'E:/HoSo/loi_mo_file_1.pdf');
+
  console.log('Batch UI save-before-switch and stale-QC guards: PASS');
 })().catch(e=>{console.error(e);process.exitCode=1});

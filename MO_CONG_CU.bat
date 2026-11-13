@@ -8,9 +8,20 @@ echo ========================================================================
 if not exist ".venv\Scripts\python.exe" goto missing_venv
 ".venv\Scripts\python.exe" -c "import pathlib, sys; bad=[p.name for p in sorted(pathlib.Path('.').glob('*.py')) if b'\x00' in p.read_bytes() or p.read_bytes().startswith(b'\xff')]; sys.exit(print('[HMU LOI] Phat hien file ma nguon bi hong (0xFF/null bytes) do loi sao chep USB:', ', '.join(bad)) or 1 if bad else 0)"
 if errorlevel 1 goto app_fail
-".venv\Scripts\python.exe" app.py
+set EXTRA_ARGS=
+:run_loop
+".venv\Scripts\python.exe" app.py %EXTRA_ARGS%
+if errorlevel 42 if not errorlevel 43 goto app_restart
 if errorlevel 1 goto app_fail
 goto end
+:app_restart
+set EXTRA_ARGS=--no-browser
+echo.
+echo ========================================================================
+echo [HMU CAP NHAT] Dang khoi dong lai cong cu voi phien ban moi...
+echo ========================================================================
+timeout /t 1 /nobreak >nul 2>&1
+goto run_loop
 :missing_venv
 echo [HMU LOI] Chua co moi truong ao .venv. Hay chay CAI_DAT_WINDOWS.bat truoc.
 if not exist "HMU_JOBS" mkdir "HMU_JOBS"

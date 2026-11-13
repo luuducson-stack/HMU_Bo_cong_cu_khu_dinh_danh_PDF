@@ -3,7 +3,11 @@
 <!-- REVIEW_CSS -->
 <header class="masthead">
  <div><span class="brand">HMU</span><h1>Khử định danh PDF</h1></div>
- <span class="local-badge">Chạy trên máy</span>
+ <div class="masthead-actions">
+  <span id="versionBadge" class="local-badge">Phiên bản: ...</span>
+  <button type="button" id="openUpdateModal" class="update-btn">🔄 Phiên bản &amp; Cập nhật</button>
+  <span class="local-badge">Chạy trên máy</span>
+ </div>
 </header>
 <section id="workspacePanel" class="panel workspace-panel" aria-labelledby="workspaceHeading">
  <h2 id="workspaceHeading">Windows 11 Desktop Workspace</h2>
@@ -23,7 +27,16 @@
 <div class="workspace-switch" role="group" aria-label="Chế độ làm việc">
  <button id="localMode" aria-pressed="true">Ca đang mở</button>
  <button id="batchMode" aria-pressed="false">Hàng đợi</button>
+ <button type="button" id="toggleShortcutPad" class="shortcut-toggle" aria-expanded="true" title="Ẩn/hiện sơ đồ bàn phím tay trái (Phím `)">⌨ Bàn phím tay trái</button>
 </div>
+<section id="shortcutPad" class="panel shortcut-pad" aria-label="Sơ đồ phím tắt tay trái 3x4">
+ <div class="shortcut-pad-head">
+  <strong>🖐 Cụm phím Tay trái cố định (Không cần di chuyển cổ tay)</strong>
+  <span id="shortcutContextBadge" class="ctx-badge">Chế độ: Mở ca</span>
+  <span class="muted small">Tay phải giữ chuột · Tay trái đặt trên <b>A - S - D - F</b> &amp; <b>Space</b> · Bấm <kbd class="kbd-hint">`</kbd> để ẩn/hiện · <kbd class="kbd-hint">Esc</kbd> thoát ô nhập</span>
+ </div>
+ <div id="shortcutGrid" class="ergo-grid" role="group" aria-label="Lưới phím 3x4 tay trái"></div>
+</section>
 <section id="batchPanel" class="panel hide" aria-labelledby="batchHeading">
 <h2 id="batchHeading">Hàng đợi</h2>
 <p class="muted">Mỗi PDF là một hồ sơ độc lập. Mở từng bản đã xử lý để duyệt và kiểm QC.</p>
@@ -31,7 +44,7 @@
 <button type="button" id="pickBatchFolder">Chọn thư mục…</button> <button id="batchAdd">Thêm vào hàng đợi</button> <button id="batchStart" class="primary">Chạy / tiếp tục</button> <button id="batchPause">Tạm dừng nhận file mới</button>
 <label>Lọc <select id="batchFilter"><option value="">Tất cả</option><option value="NEEDS_REVIEW">Chờ duyệt</option><option value="RUNNING">Đang xử lý</option><option value="QUEUED">Chờ xử lý</option><option value="READY">Đã bàn giao</option><option value="FAILED">Lỗi</option></select></label>
 <p id="batchStatus" role="status" aria-live="polite">Chưa có file trong hàng đợi.</p>
-<p><button id="batchSelectAll">Chọn tất cả đang hiển thị</button> <button id="batchClearSelection">Bỏ chọn</button> <button id="batchDeleteSelected" disabled>Xóa đã chọn</button> <span id="batchSelectedCount">0 đã chọn</span></p>
+<p><button id="batchSelectAll">Chọn tất cả đang hiển thị</button> <button id="batchClearSelection">Bỏ chọn</button> <button id="batchRetrySelected" disabled>Thử lại đã chọn</button> <button id="batchDeleteSelected" disabled>Xóa đã chọn</button> <span id="batchSelectedCount">0 đã chọn</span></p>
 <div id="batchList" class="result"></div>
 <div id="batchResult" class="result" role="status" aria-live="polite"></div>
 </section>
@@ -69,7 +82,32 @@
 <p>Nếu còn thông tin cần khử: khoanh/chọn thêm vùng trên ảnh nguồn → Xuất PDF thử để xếp hàng xuất và kiểm lại. Chỉ xác nhận giữ khi đã kiểm cảnh báo; nút Xuất PDF chính thức yêu cầu duyệt đủ trang và xử lý mọi cảnh báo.</p>
 </section>
 <div id="auditModal" class="hide"></div>
-<div id="workflow" class="hide"><nav><button id="newCase">Mở ca bệnh khác</button><button id="prevFile" class="hide">← File trước</button><select id="caseFile" aria-label="PDF trong ca bệnh" class="hide"></select><span id="filePos" class="hide"></span><button id="nextFile" class="hide">File sau →</button><label id="caseScope" class="hide"><input id="wholeCase" type="checkbox"> Xuất cả ca</label><button id="prev">← Trang trước</button><input id="pageNo" type="number" min="1" style="width:65px"><span id="pageTotal"></span><button id="next">Trang sau →</button><button id="mode">Khoanh thêm vùng xóa</button><button class="primary" id="done">Đã duyệt trang này</button><button class="success" id="approveAll">Duyệt tất cả trang</button><button id="viewAudit">Báo cáo Markdown</button><button id="save">Lưu</button><button id="draft">Xuất PDF thử</button><button class="primary" id="export">Xuất PDF chính thức</button><a id="download" class="hide" href="/download" download>Tải PDF</a></nav>
-<main><div id="view"><canvas id="canvas"></canvas></div><aside><div id="help">Vùng <b style="color:#c33">đỏ</b> sẽ bị xóa (đã tự động chọn Tên BN, SĐT, Địa chỉ, Ngày/Năm sinh, Tên & Chữ ký nhân viên, Watermark). Giữ nguyên dữ liệu Tuổi. Vùng định danh đã xác nhận được tự tích đỏ sau khi quét. Đề xuất thiếu ngữ cảnh đang để chưa chọn; cần kiểm tra và chọn bổ sung. Vùng <b style="color:#ba7800">cam</b> được giữ lại (Logo, Ảnh chuyên môn, Mã vạch hậu kiểm).<p>Nhấp vùng hoặc ô chọn để giữ/xóa. Khoanh thêm vùng bằng cách kéo chuột. Có thể bấm <b>“✓ Duyệt tất cả trang”</b> rồi bấm <b>“Xuất PDF chính thức”</b>.</p></div><div id="items"></div><p>Ghi chú trang <input id="note" style="width:90%"></p></aside></main></div>
+<div id="offlineModal" class="offline-overlay hide" role="dialog" aria-modal="true" aria-labelledby="offlineHeading">
+ <div class="offline-dialog panel">
+  <h2 id="offlineHeading">⚠️ Mất kết nối máy chủ</h2>
+  <p id="offlineMessage" class="muted">Không thể kết nối đến máy chủ cục bộ (Terminal có thể đã tắt hoặc bị gián đoạn). Thao tác giao diện đang tạm khóa.</p>
+  <div class="offline-actions form-row">
+   <button type="button" id="saveOfflineSession" class="primary">Lưu phiên làm việc</button>
+   <button type="button" id="dismissOfflineModal">Bỏ qua</button>
+  </div>
+ </div>
+</div>
+<div id="updateModal" class="update-overlay hide" role="dialog" aria-modal="true" aria-labelledby="updateHeading">
+ <div class="update-dialog panel">
+  <div class="update-modal-header">
+   <h2 id="updateHeading">🔄 Quản lý Phiên bản &amp; Cập nhật</h2>
+   <button type="button" id="closeUpdateModal" class="close-btn" aria-label="Đóng">&times;</button>
+  </div>
+  <div id="updateCurrentInfo" class="update-info-block"></div>
+  <div id="updateComparisonStatus" class="update-status-block"></div>
+  <div class="update-quick-actions form-row">
+   <button type="button" id="btnCheckUpdate" class="primary">Kiểm tra &amp; cập nhật</button>
+   <button type="button" id="btnRollbackPrev">Quay lại bản trước</button>
+  </div>
+  <div id="updateRestartNotice" class="update-restart-notice hide"></div>
+ </div>
+</div>
+<div id="workflow" class="hide"><nav><button id="newCase">Mở ca bệnh khác</button><button id="prevFile" class="hide">← File trước</button><select id="caseFile" aria-label="PDF trong ca bệnh" class="hide"></select><span id="filePos" class="hide"></span><button id="nextFile" class="hide">File sau →</button><label id="caseScope" class="hide"><input id="wholeCase" type="checkbox"> Xuất cả ca</label><button id="prev">← Trang trước</button><input id="pageNo" type="number" min="1" style="width:65px"><span id="pageTotal"></span><button id="next">Trang sau →</button><button id="mode">Khoanh thêm vùng xóa</button><button class="primary" id="done">Đã duyệt trang này</button><button class="success" id="approveAll">Duyệt tất cả trang</button><button id="viewAudit">Báo cáo Markdown</button><button id="save">Lưu</button><button id="draft">Xuất PDF thử</button><button class="primary" id="export">Xuất PDF chính thức</button><a id="download" class="hide" href="/download" download>Tải PDF</a></nav><section id="fileIssues" class="panel file-issues hide" role="alert" aria-live="polite" aria-label="File lỗi hoặc chưa xuất được"></section>
+<main><div id="view"><canvas id="canvas"></canvas></div><aside><div id="help">Vùng <b style="color:#c33">đỏ</b> sẽ bị xóa (đã tự động chọn Tên BN, SĐT, Địa chỉ, Ngày/Năm sinh, Tên & Chữ ký nhân viên, Watermark). Giữ nguyên dữ liệu Tuổi. Vùng định danh đã xác nhận được tự tích đỏ sau khi quét. Đề xuất thiếu ngữ cảnh đang để chưa chọn; cần kiểm tra và chọn bổ sung. Vùng <b style="color:#ba7800">cam</b> được giữ lại (Logo, Ảnh chuyên môn, Mã vạch hậu kiểm).<p>Nhấp vùng hoặc ô chọn để giữ/xóa. Khoanh thêm vùng bằng cách kéo chuột. Có thể bấm <b>“✓ Duyệt tất cả trang”</b> rồi bấm <b>“Xuất PDF chính thức”</b>.</p></div><div id="itemsToolbar" class="items-toolbar"><span id="proposalCountSummary" class="muted small">Đã chọn 0/0 mục</span><button type="button" id="toggleSelectAllProposals">☑ Tích chọn tất cả</button></div><div id="items"></div><p>Ghi chú trang <input id="note" style="width:90%"></p></aside></main></div>
 <!-- REVIEW_JS -->
 </html>

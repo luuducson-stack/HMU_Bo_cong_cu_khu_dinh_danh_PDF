@@ -179,6 +179,56 @@ def span_rects(chars, a, b):
     return [[round(v, 3) for v in r] for group in by_line.values() for r in group]
 
 
+def complete_address_rects(rects, chars):
+    """Cover address words the matched span skipped, using geometry only.
+
+    On real pages some words of the address line sit far from the span in the page text (merged native + OCR order), so
+    the mask has holes ("Thanh", "Nam") and QC later reads them on the output. On one visual line: join pieces separated by
+    at most 3 words (<= 6 line heights) and add "Nam" right after a masked "Viet". Other lines and labels are untouched.
+    """
+    if not rects:
+        return rects
+    glyphs = [(fitz.Rect(c[2]), c[3]) for c in chars if not c[3].isspace()]
+
+    def line_words(box):
+        """Words (x0, x1, text) sharing the visual line of `box`, left to right; a gap > 15% of the height splits words."""
+        mid = (box.y0 + box.y1) / 2
+        words = []
+        for r, ch in sorted(((r, ch) for r, ch in glyphs if r.y0 < mid < r.y1), key=lambda g: g[0].x0):
+            if words and r.x0 - words[-1][1] <= .15 * box.height:
+                words[-1][1] = max(words[-1][1], r.x1); words[-1][2] += ch
+            else:
+                words.append([r.x0, r.x1, ch])
+        return words
+
+    by_line = []
+    for box in sorted((fitz.Rect(r) for r in rects), key=lambda b: ((b.y0 + b.y1) / 2, b.x0)):
+        for line in by_line:
+            if line[0].y0 < (box.y0 + box.y1) / 2 < line[0].y1:
+                line.append(box); break
+        else:
+            by_line.append([box])
+    out = []
+    for line in by_line:
+        line.sort(key=lambda b: b.x0)
+        words = line_words(line[0])
+        merged = [fitz.Rect(line[0])]
+        for box in line[1:]:
+            between = [w for w in words if w[0] >= merged[-1].x1 - .5 and w[1] <= box.x0 + .5]
+            if box.x0 <= merged[-1].x1 or (between and len(between) <= 3 and box.x0 - merged[-1].x1 <= 6 * box.height):
+                merged[-1] |= box
+            else:
+                merged.append(fitz.Rect(box))
+        for box in merged:
+            inside = [w for w in words if w[0] >= box.x0 - .5 and w[1] <= box.x1 + .5]
+            after = [w for w in words if w[0] >= box.x1 - .5]
+            if (inside and after and after[0][0] - box.x1 <= .8 * box.height
+                    and _strip_accents(inside[-1][2].lower()) == 'viet' and _strip_accents(after[0][2].lower()) == 'nam'):
+                box = fitz.Rect(box.x0, box.y0, after[0][1], box.y1)
+            out.append(box)
+    return [[round(v, 3) for v in r] for r in out]
+
+
 def name_geometry_valid(finding, chars):
     boxes=[fitz.Rect(r) for r in span_rects(chars,finding.start,finding.end)]
     if not boxes:return False
@@ -1325,9 +1375,20 @@ def build_review_markdown(text, chars, review, pixel_rects=None, native_length=N
     return _build_redacted_markdown(text,fs)
 
 
-def validate_redaction_regions(rects, protected_rects, pn):
-    if any(fitz.Rect(r).intersects(fitz.Rect(pr)) for r in rects for pr in protected_rects):
-        raise ValueError(f'Clinical overlap on page {pn}; correct the selected region')
+class ReviewError(ValueError):
+    """A refusal that knows where it happened; `where` (page, kind, rect, code, pages, file) is shown to the user in Vietnamese."""
+    def __init__(self, message, **where):
+        super().__init__(message)
+        self.where = where
+
+
+def validate_redaction_regions(rects, protected_rects, pn, labels=None, page=None):
+    for i, r in enumerate(rects):
+        for pr in protected_rects:
+            if fitz.Rect(r).intersects(fitz.Rect(pr)):
+                code = ' '.join(page.get_textbox(fitz.Rect(pr)).split())[:24] if page is not None else ''
+                raise ReviewError(f'Clinical overlap on page {pn}; correct the selected region', page=pn,
+                                  kind=labels[i] if labels else None, rect=[round(v) for v in r], code=code)
 
 
 def ensure_job(job):
@@ -1539,6 +1600,13 @@ def prepare(source, job, study_id='HMU_CASE_0001', external_seeds=None, progress
                     if ':confirmed_case_short' not in f.rule and not name_geometry_valid(f,chars):
                         prior=f.rule;f.rule+=':confirmed_grid_short'
                         if not signature_heading_confirms(f,text,chars) or not name_in_single_table_cell(p,span_rects(chars,f.start,f.end)):f.rule=prior
+            # The caller's patient seed (case folder name) is ground truth: a full name of >=3 words matching it needs no label context.
+            for f in all_fs:
+                if f.entity_type=='PATIENT_NAME' and f.review_status=='CONTEXT_REQUIRED' and ':CONTEXT_REQUIRED_REVIEW' in f.rule:
+                    parts=f.text.split()
+                    if any(len(tokens)==len(parts) and all(re.fullmatch(_ocr_word_regex(_strip_accents(w.lower())),_strip_accents(v.lower()),re.I) for w,v in zip(tokens,parts))
+                           for tokens in (n.split() for n in (external_seeds or {}).get('PATIENT_NAME',[])) if len(tokens)>=3):
+                        f.review_status='PENDING_REVIEW';f.score=.97;f.rule+=':confirmed_folder_name'
             _check_name_geometry(all_fs,lambda f:name_geometry_valid(f,chars))
             for f in all_fs:
                 if f.review_status=='CONTEXT_REQUIRED' and signature_heading_confirms(f,text,chars):
@@ -1555,6 +1623,7 @@ def prepare(source, job, study_id='HMU_CASE_0001', external_seeds=None, progress
                 seen.add((f.start, f.end))
                 rects = staff_name_rects(text,chars,f) if f.entity_type=='HEALTHCARE_STAFF_NAME' else span_rects(chars, f.start, f.end)
                 if f.rule=='insurance_missing_prefix_ocr':rects=insurance_value_rects(text,chars,f,p.rect)
+                if f.entity_type=='ADDRESS_VN':rects=complete_address_rects(rects,chars)
                 if not rects:
                     continue
                 # Ensure DOB/YOB rects on cover sheet never cross into Age column
@@ -1891,7 +1960,8 @@ def apply_review_to_page(p, review, pn):
         replacement = doc.get_new_xref(); doc.update_object(replacement, '<< >>')
         doc.update_stream(replacement, source); p.set_contents(replacement)
     image_rects = [r for q in review['proposals'] if q['selected'] and q['kind'] in {'IMAGE_REVIEW', 'SIGNATURE_IMAGE'} for r in q['rects']]
-    validate_redaction_regions(image_rects, review.get('protected_rects',[]), pn)
+    image_kinds = [q['kind'] for q in review['proposals'] if q['selected'] and q['kind'] in {'IMAGE_REVIEW', 'SIGNATURE_IMAGE'} for _ in q['rects']]
+    validate_redaction_regions(image_rects, review.get('protected_rects',[]), pn, image_kinds, p)
     removed_images = []
     selected_annots = [r for q in review['proposals'] if q['selected'] and q['kind'] == 'ANNOTATION_REVIEW' for r in q['rects']]
     for a in list(p.annots() or []):
@@ -1907,14 +1977,18 @@ def apply_review_to_page(p, review, pn):
     pending = [i for i in range(len(image_rects)) if i not in removed_images]
     removed_images.extend(pending[i] for i in remove_selected_image_paints(p, [image_rects[i] for i in pending]))
     fallback = [r for i, r in enumerate(image_rects) if i not in removed_images]
-    rects = [
-        r for q in review['proposals']
+    text_regions = [
+        (r, q['kind']) for q in review['proposals']
         if q['selected'] and q['kind'] not in {'IMAGE_REVIEW', 'SIGNATURE_IMAGE', 'ANNOTATION_REVIEW', 'WIDGET_REVIEW', 'WATERMARK_TEXT'}
         for r in q['rects']
-    ] + fallback + review['manual_rects']
-    if any(q['selected'] and q['clinical_overlap'] for q in review['proposals']):
-        raise ValueError(f'Clinical overlap on page {pn}; deselect/correct before export')
-    validate_redaction_regions(rects, review.get('protected_rects', []), pn)
+    ]
+    rects = [r for r, _ in text_regions] + fallback + review['manual_rects']
+    labels = [kind for _, kind in text_regions] + ['IMAGE_REVIEW'] * len(fallback) + ['MANUAL'] * len(review['manual_rects'])
+    for q in review['proposals']:
+        if q['selected'] and q['clinical_overlap']:
+            raise ReviewError(f'Clinical overlap on page {pn}; deselect/correct before export', page=pn, kind=q['kind'],
+                              rect=[round(v) for v in q['rects'][0]] if q['rects'] else None)
+    validate_redaction_regions(rects, review.get('protected_rects', []), pn, labels, p)
     # Rectangles are physically erased on the final raster; do not rewrite source glyphs or grids.
     return rects, removed_images, fallback
 
@@ -1930,6 +2004,57 @@ def approve_all_pages(job):
     save_json(job / 'review.json', current)
     return current
 
+def deselect_clinical_overlaps(job):
+    """Batch draft valve: deselect selected proposals that touch protected clinical text instead of aborting the file.
+
+    The deselected proposal stays in review.json, so output QC reports it as an unselected source candidate and a
+    human decides. Manual rectangles are never touched: those are human choices and still fail the export.
+    """
+    job = Path(job); data = ensure_job(job); found = []
+    with fitz.open(job / 'working_private.pdf') as doc:
+        for pn, (p, review) in enumerate(zip(doc, data['pages']), 1):
+            protected = [fitz.Rect(r) * p.derotation_matrix for r in review.get('protected_rects', [])]
+            for q in review['proposals']:
+                if q['selected'] and q['kind'] != 'WATERMARK_TEXT' and (
+                        q.get('clinical_overlap') or any(fitz.Rect(r).intersects(pr) for r in q['rects'] for pr in protected)):
+                    q['selected'] = False
+                    q['rule'] = q.get('rule', '') + ':auto_deselected_clinical_overlap'
+                    found.append(dict(page=pn, id=q['id'], kind=q['kind']))
+        if found:
+            data['revision'] += 1
+            validate_review(data, doc)
+            save_json(job / 'review.json', data)
+    return found
+
+
+def apply_qc_feedback(job, findings):
+    """Close the QC loop: output OCR still reads a clearly labelled identifier, so mask exactly that region too.
+
+    Callers pass only high-confidence findings. Regions touching protected clinical text, rotated pages and findings
+    already applied are skipped. Adding selected proposals bumps the revision; the caller re-exports and re-verifies.
+    """
+    job = Path(job); data = ensure_job(job); added = []
+    with fitz.open(job / 'working_private.pdf') as doc:
+        for f in findings:
+            page = doc[f['page'] - 1]; review = data['pages'][f['page'] - 1]
+            rects = [[round(v, 3) for v in r] for r in f['rects']]
+            rule = 'qc_feedback:' + f['rule']
+            protected = [fitz.Rect(r) * page.derotation_matrix for r in review.get('protected_rects', [])]
+            if (not rects or page.rotation or any(fitz.Rect(r).intersects(pr) for r in rects for pr in protected)
+                    or any(q.get('rule', '').startswith('qc_feedback:') and q['rects'] == rects for q in review['proposals'])):
+                continue
+            review['proposals'].append(dict(
+                id=f"p{f['page']}-qcfb{len(review['proposals'])}", kind=f['kind'], text=f.get('text', ''), rule=rule,
+                review_status='PENDING_REVIEW', score=.99, rects=rects, selected=True, clinical_overlap=False,
+                provenance='OCR lại PDF xuất vẫn thấy trường có nhãn rõ; đã che bổ sung và kiểm lại'))
+            added.append(dict(page=f['page'], kind=f['kind'], rule=f['rule']))
+        if added:
+            data['revision'] += 1
+            validate_review(data, doc)
+            save_json(job / 'review.json', data)
+    return added
+
+
 def _write_export_pair(job, snapshot, destination, draft, progress_cb=None, *, applied_pages=None):
     data = snapshot; data['export_draft'] = bool(draft); job=Path(job)
     work = job / 'working_private.pdf'
@@ -1938,7 +2063,8 @@ def _write_export_pair(job, snapshot, destination, draft, progress_cb=None, *, a
     if sha(work) != data['working_sha256']:
         raise ValueError('Working PDF changed; refuse export')
     if not draft and not all(p['reviewed'] for p in data['pages']):
-        raise ValueError('Review all pages, or export a draft for review')
+        raise ReviewError('Review all pages, or export a draft for review', pages=[p['page'] for p in data['pages'] if not p['reviewed']],
+                          file=data.get('source_file'))
     study_id = data.get('study_id', 'HMU_CASE_0001')
     if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', study_id):
         raise ValueError('Invalid research ID')
@@ -1953,7 +2079,11 @@ def _write_export_pair(job, snapshot, destination, draft, progress_cb=None, *, a
             for pn, (p, review) in enumerate(zip(doc, data['pages']), 1):
                 if progress_cb and (pn == 1 or pn % 10 == 0 or pn == total_pages):
                     progress_cb(f'Đang xóa định danh & kết xuất PDF trang {pn}/{total_pages}...')
-                rects, removed_images, fallback = apply_review_to_page(p, review, pn)
+                try:
+                    rects, removed_images, fallback = apply_review_to_page(p, review, pn)
+                except ReviewError as exc:
+                    exc.where.setdefault('file', data.get('source_file'))
+                    raise
                 if applied_pages is not None:
                     applied_pages[pn] = [list(fitz.Rect(r)*p.rotation_matrix) for r in rects]
                 pix = p.get_pixmap(dpi=int(data.get('dpi', 200)), alpha=False, annots=True)
@@ -2036,16 +2166,24 @@ def export(job, draft=False, approve_all=False, output_path=None, progress_cb=No
         if staging.exists():shutil.rmtree(staging)
 
 
-def prepare_case(case_path, job_root, study_id='HMU_CASE_0001', progress_cb=None):
+def prepare_case(case_path, job_root, study_id='HMU_CASE_0001', progress_cb=None, resume=False, on_file_prepared=None):
     """Prepare either a single PDF file or a case directory of 40-90 PDFs (like 1.DHYHN) sharing case seeds."""
     case_path = Path(case_path).resolve()
     job_root = Path(job_root).resolve()
-    if job_root.exists() and any(job_root.iterdir()):
+    if not resume and job_root.exists() and any(job_root.iterdir()):
         raise ValueError('Use a new empty job_root directory')
     job_root.mkdir(parents=True, exist_ok=True)
     pdfs = [case_path] if case_path.is_file() else sorted(case_path.glob('*.pdf'))
     if not pdfs:
         raise ValueError(f'Không tìm thấy file PDF trực tiếp trong thư mục: {case_path}')
+
+    existing_active = None
+    if resume and (job_root / 'case_manifest.json').is_file():
+        try:
+            old_mf = json.loads((job_root / 'case_manifest.json').read_text(encoding='utf-8'))
+            existing_active = old_mf.get('active_sub_job')
+        except Exception:
+            pass
 
     if progress_cb:
         progress_cb(f'Đang trích xuất hạt giống định danh ca bệnh ({case_path.name})...')
@@ -2080,17 +2218,31 @@ def prepare_case(case_path, job_root, study_id='HMU_CASE_0001', progress_cb=None
         f"- **Hạt giống định danh ca bệnh (Case Seeds):** `{json.dumps(shared_seeds, ensure_ascii=False)}`",
         "",
     ]
+    manifest = {}
     for idx, pdf_file in enumerate(pdfs, 1):
         sub_id = study_id
         sub_job = job_root / f"file_{idx:03d}"
-        d = prepare(
-            pdf_file,
-            sub_job,
-            study_id=sub_id,
-            external_seeds=shared_seeds,
-            case_xml_index=case_xml_index,
-            progress_cb=(lambda msg, i=idx, n=len(pdfs): progress_cb(f'[File {i}/{n}] {msg}')) if progress_cb else None,
-        )
+        d = None
+        if resume and (sub_job / 'review.json').is_file() and (sub_job / 'working_private.pdf').is_file():
+            try:
+                cand_d = ensure_job(sub_job)
+                if cand_d.get('source_sha256') == sha(pdf_file):
+                    d = cand_d
+                    if not (sub_job / 'AUDIT_SUMMARY.md').is_file():
+                        generate_audit_markdown(sub_job, d)
+            except Exception:
+                d = None
+        if d is None:
+            if sub_job.exists():
+                shutil.rmtree(sub_job, ignore_errors=True)
+            d = prepare(
+                pdf_file,
+                sub_job,
+                study_id=sub_id,
+                external_seeds=shared_seeds,
+                case_xml_index=case_xml_index,
+                progress_cb=(lambda msg, i=idx, n=len(pdfs): progress_cb(f'[File {i}/{n}] {msg}')) if progress_cb else None,
+            )
         files_info.append({
             'index': idx,
             'source_name': pdf_file.name,
@@ -2101,15 +2253,19 @@ def prepare_case(case_path, job_root, study_id='HMU_CASE_0001', progress_cb=None
         sub_audit = (sub_job / 'AUDIT_SUMMARY.md').read_text(encoding='utf-8')
         combined_md.append(f"---\n## File {idx}/{len(pdfs)}: `{pdf_file.name}`\n")
         combined_md.append(sub_audit)
+        manifest = {
+            'version': VERSION,
+            'study_id': study_id,
+            'source_path': str(case_path),
+            'shared_seeds': shared_seeds,
+            'complete': idx == len(pdfs),
+            'active_sub_job': existing_active or files_info[0]['sub_job'],
+            'files': list(files_info),
+        }
+        save_json(job_root / 'case_manifest.json', manifest)
+        if callable(on_file_prepared):
+            on_file_prepared(job_root, sub_job, idx, len(pdfs))
 
-    manifest = {
-        'version': VERSION,
-        'study_id': study_id,
-        'source_path': str(case_path),
-        'shared_seeds': shared_seeds,
-        'files': files_info,
-    }
-    save_json(job_root / 'case_manifest.json', manifest)
     (job_root / 'AUDIT_SUMMARY.md').write_text('\n'.join(combined_md), encoding='utf-8')
     return manifest
 
@@ -2123,7 +2279,9 @@ def export_case(job_root, draft=False, approve_all=False, progress_cb=None):
         job=(job_root/item['sub_job']).resolve()
         if not job.is_relative_to(job_root):raise ValueError('Invalid sub-job path')
         data=approve_all_pages(job) if approve_all else ensure_job(job)
-        if not draft and not all(p['reviewed'] for p in data['pages']):raise ValueError('Review all files before exporting the case')
+        if not draft and not all(p['reviewed'] for p in data['pages']):
+            raise ReviewError('Review all files before exporting the case', pages=[p['page'] for p in data['pages'] if not p['reviewed']],
+                              file=item.get('source_name') or data.get('source_file'))
         with fitz.open(job/'working_private.pdf') as doc:validate_review(data,doc)
         snapshots.append((job,data))
     export_id=secrets.token_hex(12);staging=job_root/'.export_staging'/export_id;staging.mkdir(parents=True)

@@ -9,7 +9,7 @@ import secrets
 import shutil
 import sqlite3
 import time
-from error_pipeline import record_error_event
+from error_pipeline import record_error_event, vi_message
 
 
 RUNNING = {'PREPARING', 'EXPORTING', 'VERIFYING'}
@@ -144,6 +144,8 @@ def enqueue(db_path: Path, sources: list[Path], *, target_folders: dict | list |
         digest = _sha(source)
         pages = 0
         error = ''
+        err_record = None
+        report_root = root.parent if root.name in {'batch', 'queue'} else root
         try:
             with fitz.open(source) as doc:
                 if doc.is_encrypted:
@@ -152,24 +154,32 @@ def enqueue(db_path: Path, sources: list[Path], *, target_folders: dict | list |
                 if not pages:
                     raise ValueError('Empty PDF')
         except Exception as exc:
-            error = 'PDF hỏng, trống hoặc có mật khẩu; cần kiểm tra nguồn.'
-            record_error_event(
-                root,
+            err_record = record_error_event(
+                report_root,
                 exc,
                 stage='BATCH_ENQUEUE',
                 source_file=source.name,
                 category='FILE_ERROR',
             )
-        prepared.append((source, target_folder, digest, pages, error))
+            rc = err_record.get('root_cause') or f"{type(exc).__name__}: {exc}"
+            error = f'PDF hỏng, trống hoặc có mật khẩu; cần kiểm tra nguồn. (Gốc lỗi: {rc})'
+        prepared.append((source, target_folder, digest, pages, error, err_record))
     ids = []
     with _db(db_path) as con:
-        for source, target_folder, digest, pages, error in prepared:
+        # Windows clock ticks ~15ms: ties would fall back to the random id and break FIFO order and duplicate-original choice.
+        last_created = con.execute('SELECT coalesce(max(created),0) FROM jobs').fetchone()[0]
+        for source, target_folder, digest, pages, error, err_record in prepared:
             old = con.execute('SELECT id,state,target_folder FROM jobs WHERE source_path=? AND source_sha256=?', (str(source), digest)).fetchone()
             if old:
                 if old['state'] == 'DELETING':
                     raise ValueError('Mục đang xóa; hoàn tất xóa trước khi thêm lại nguồn')
                 if target_folder and old['target_folder'] != target_folder:
                     con.execute('UPDATE jobs SET target_folder=? WHERE id=?', (target_folder, old['id']))
+                if old['state'] == 'FAILED' and err_record:
+                    con.execute(
+                        'UPDATE jobs SET error=?,result_json=?,updated=? WHERE id=?',
+                        (error, json.dumps({'error_detail': {**err_record, 'job_id': old['id'], 'queue_id': old['id']}}, ensure_ascii=False), time.time(), old['id']),
+                    )
                 ids.append(old['id'])
                 continue
             duplicate = con.execute(
@@ -177,14 +187,15 @@ def enqueue(db_path: Path, sources: list[Path], *, target_folders: dict | list |
                 (digest,),
             ).fetchone()
             ident = secrets.token_hex(16)
-            now = time.time()
+            now = last_created = max(time.time(), last_created + 1e-6)
             state = 'FAILED' if error else ('DUPLICATE' if duplicate else 'QUEUED')
+            res_json = json.dumps({'error_detail': {**err_record, 'job_id': ident, 'queue_id': ident}}, ensure_ascii=False) if err_record else '{}'
             con.execute(
                 '''INSERT INTO jobs
-                (id,source_path,source_name,source_sha256,pages,state,job_dir,duplicate_of,error,created,updated,target_folder)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
+                (id,source_path,source_name,source_sha256,pages,state,job_dir,duplicate_of,error,created,updated,result_json,target_folder)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                 (ident, str(source), source.name, digest, pages, state, str(root / 'jobs' / ident),
-                 duplicate['id'] if duplicate else None, error, now, now, target_folder),
+                 duplicate['id'] if duplicate else None, error, now, now, res_json, target_folder),
             )
             ids.append(ident)
     return ids
@@ -207,7 +218,12 @@ _SUMMARY_FIELDS = '''id,source_path,source_name,source_sha256,pages,state,job_di
       'error_detail',json_extract(result_json,'$.error_detail'),
       'verification',json_object('status',json_extract(result_json,'$.verification.status'),
         'finding_count',coalesce(json_array_length(result_json,'$.verification.findings'),0),
-        'unreadable_count',coalesce(json_array_length(result_json,'$.verification.unreadable_pages'),0))) AS result_json'''
+        'unreadable_count',coalesce(json_array_length(result_json,'$.verification.unreadable_pages'),0),
+        'unreadable_pages',json(coalesce(json_extract(result_json,'$.verification.unreadable_pages'),'[]')),
+        -- page/kind/reason only (never the finding text) so the 2s poll stays free of PHI; capped for big reports
+        'issues',json((SELECT json_group_array(json_object('page',json_extract(f.value,'$.page'),
+            'kind',json_extract(f.value,'$.kind'),'reason',json_extract(f.value,'$.reason')))
+            FROM (SELECT value FROM json_each(result_json,'$.verification.findings') LIMIT 40) AS f)))) AS result_json'''
 
 
 def list_jobs(db_path: Path, *, details=True) -> list[dict]:
@@ -250,9 +266,10 @@ def _write_stage_result(con, row, result):
     revision = result.get('revision', row['revision'])
     if type(revision) is not int or revision < row['revision']:
         raise ValueError('Review revision changed')
+    pages = result['pages'] if type(result.get('pages')) is int and result['pages'] > 0 else row['pages']
     con.execute(
-        'UPDATE jobs SET state=?,revision=?,result_json=?,error=?,updated=? WHERE id=?',
-        (state, revision, json.dumps(result, ensure_ascii=False), str(result.get('error', '')), time.time(), row['id']),
+        'UPDATE jobs SET state=?,revision=?,pages=?,result_json=?,error=?,updated=? WHERE id=?',
+        (state, revision, pages, json.dumps(result, ensure_ascii=False), str(result.get('error', '')), time.time(), row['id']),
     )
 
 
@@ -442,17 +459,32 @@ def _reap_active_workers(db_path: Path, active: dict, by_id: dict, timeout_secon
                 except Exception:
                     error = {'message': f'Worker stopped with exit {code}', 'retryable': True}
             else:
+                log_path = Path(row['job_dir']) / f"worker_{work['attempt_id']}.log"
+                log_tail = ''
+                if log_path.is_file():
+                    try:
+                        lines = [ln.strip() for ln in log_path.read_text(encoding='utf8', errors='replace').splitlines() if ln.strip()]
+                        if lines:
+                            log_tail = lines[-1]
+                    except Exception:
+                        pass
+                err_msg = f'Worker stopped with exit {code}' + (f' (Gốc lỗi: {log_tail})' if log_tail else '')
                 err_record = record_error_event(
                     Path(db_path).resolve().parent.parent,
-                    RuntimeError(f'Worker stopped with exit {code}'),
+                    RuntimeError(err_msg),
                     stage='BATCH_WORKER',
                     source_file=row.get('source_name'),
                     job_id=ident,
                     queue_id=ident,
+                    root_cause=log_tail or f'Worker exit code {code}',
                 )
                 error = {**err_record, 'retryable': True}
             retry = bool(error.get('retryable')) and row['attempts'] < QueueLimits.MAX_ATTEMPTS
-            finish_worker(db_path, ident, {'state': 'QUEUED' if retry else 'FAILED', 'error': error.get('message', ''), 'error_detail': error})
+            msg_out = error.get('message', '')
+            rc_out = error.get('root_cause', '')
+            if rc_out and rc_out not in msg_out:
+                msg_out = f"{msg_out} (Gốc lỗi: {rc_out})" if msg_out else rc_out
+            finish_worker(db_path, ident, {'state': 'QUEUED' if retry else 'FAILED', 'error': msg_out, 'error_detail': error})
     return mutated
 
 
@@ -496,7 +528,7 @@ def _admit_pending_workers(
                 job_id=row['id'],
                 queue_id=row['id'],
             )
-            set_stage_result(db_path, row['id'], expected_state='PREPARING', result={'state': 'FAILED', 'error': str(exc), 'error_detail': err})
+            set_stage_result(db_path, row['id'], expected_state='PREPARING', result={'state': 'FAILED', 'error': err['message'], 'error_detail': err})
             raise
         active[row['id']] = dict(process=managed, attempt_id=attempt, started=time.monotonic())
         pending = [r for r in pending if r['id'] != row['id']]
@@ -598,6 +630,16 @@ def run_queue(
     return dict(seconds=time.perf_counter() - started, max_active_jobs=maximum, peak_sampled_rss_bytes=peak, states=states)
 
 
+def run_if_idle(db_path: Path, **options) -> dict:
+    """Coordinator entry point: a second launch (double click, resume right after start) exits quietly, no traceback."""
+    try:
+        return run_queue(db_path, **options)
+    except RuntimeError as exc:
+        if 'already has a running coordinator' not in str(exc):
+            raise
+        return {'already_running': True}
+
+
 def start_background(db_path: Path, *, jobs=2, ocr_workers=1, render_workers=1):
     import subprocess
     import sys
@@ -618,7 +660,8 @@ def review_lock(db_path, job_id):
     row = get_job(db_path, job_id)
     with queue_lock(Path(row['job_dir']) / 'review_operation'):
         row = get_job(db_path, job_id)
-        if row['state'] not in {'NEEDS_REVIEW', 'READY'}:
+        has_review = (Path(row['job_dir']) / 'review' / 'review.json').is_file()
+        if row['state'] not in {'NEEDS_REVIEW', 'READY'} and not (row['state'] == 'FAILED' and has_review):
             raise ValueError('File đang xử lý; chờ PDF để duyệt')
         yield row
 
@@ -691,23 +734,68 @@ def cancel_job(db_path, job_id):
 
 
 def retry_job(db_path, job_id):
+    import fitz
     from batch_worker import processing_fingerprint
     row = get_job(db_path, job_id)
     if row['state'] not in {'FAILED', 'CANCELLED'}:
         raise ValueError('Chỉ thử lại file lỗi hoặc đã hủy')
-    if _sha(row['source_path']) != row['source_sha256']:
-        raise ValueError('Nguồn đã đổi; thêm lại file mới')
-    # Preserve all old generations; a changed engine must never bless an old fingerprint.
+    source_path = Path(row['source_path'])
+    if not source_path.is_file():
+        raise ValueError(f'Không tìm thấy file nguồn: {source_path}')
+    current_sha = _sha(source_path)
+    sha_changed = current_sha != row['source_sha256']
+    pages = row['pages']
+    if sha_changed or not pages:
+        try:
+            with fitz.open(source_path) as doc:
+                if not doc.is_encrypted and len(doc) > 0:
+                    pages = len(doc)
+        except Exception:
+            pass
+    # Preserve all old generations; a changed engine or changed source must never bless an old fingerprint.
     checkpoint = Path(row['job_dir']) / 'prepare_checkpoint.json'
-    compatible = not checkpoint.exists() or json.loads(checkpoint.read_text(encoding='utf8')) == processing_fingerprint(row)
+    compatible = (not sha_changed) and (
+        not checkpoint.exists() or json.loads(checkpoint.read_text(encoding='utf8')) == processing_fingerprint(row)
+    )
     new_dir = Path(row['job_dir']) if compatible else Path(db_path).resolve().parent / 'jobs' / f"{job_id}_{secrets.token_hex(8)}"
     with _db(db_path) as con:
+        conflict = con.execute(
+            'SELECT id FROM jobs WHERE source_path=? AND source_sha256=? AND id!=?',
+            (str(source_path), current_sha, job_id),
+        ).fetchone()
+        sha_to_save = row['source_sha256'] if conflict else current_sha
         updated = con.execute(
-            "UPDATE jobs SET state='QUEUED',job_dir=?,revision=?,attempts=0,error='',result_json='{}',updated=? WHERE id=? AND state=?",
-            (str(new_dir), row['revision'] if compatible else 0, time.time(), job_id, row['state']),
+            "UPDATE jobs SET state='QUEUED',source_sha256=?,pages=?,job_dir=?,revision=?,attempts=0,error='',result_json='{}',updated=? WHERE id=? AND state=?",
+            (sha_to_save, pages, str(new_dir), row['revision'] if compatible else 0, time.time(), job_id, row['state']),
         ).rowcount
         if updated != 1:
             raise ValueError('Queue state changed')
+
+
+def retry_jobs(db_path, job_ids) -> dict:
+    if not isinstance(job_ids, list) or not 1 <= len(job_ids) <= 2000:
+        raise ValueError('Chọn ít nhất một mục lỗi để thử lại')
+    ordered = []
+    seen = set()
+    for ident in job_ids:
+        if not isinstance(ident, str) or not re.fullmatch(r'[0-9a-f]{32}', ident):
+            raise ValueError('Invalid queue job ID')
+        if ident not in seen:
+            seen.add(ident)
+            ordered.append(ident)
+    retried = []
+    skipped = []
+    for ident in ordered:
+        row = get_job(db_path, ident)
+        if row['state'] not in {'FAILED', 'CANCELLED'}:
+            skipped.append({'id': ident, 'source_name': row['source_name'], 'reason': 'Chỉ thử lại mục lỗi hoặc đã hủy'})
+            continue
+        try:
+            retry_job(db_path, ident)
+            retried.append(ident)
+        except Exception as exc:
+            skipped.append({'id': ident, 'source_name': row['source_name'], 'reason': str(exc)})
+    return {'retried': retried, 'skipped': skipped}
 
 
 def _deletable_work_dir(db_path, row):
@@ -770,7 +858,7 @@ def _delete_jobs(db_path, job_ids):
                 locks.enter_context(queue_lock(root / 'review_operation'))
                 candidates.append(row)
             except (OSError, ValueError, RuntimeError) as exc:
-                skipped.append(dict(id=ident, source_name=row['source_name'] if row else ident, reason=str(exc)))
+                skipped.append(dict(id=ident, source_name=row['source_name'] if row else ident, reason=vi_message(str(exc))))
         # Mark the whole selection before releasing locks, so a duplicate cannot be claimed mid-delete.
         with _db(db_path) as con:
             marked = []
@@ -807,9 +895,10 @@ def _delete_jobs(db_path, job_ids):
 
 
 def _approved_output(row, expected_revision):
+    import engine
     review, qc, pdf = current_verification(row, expected_revision)
     if not all(p['reviewed'] for p in review['pages']):
-        raise ValueError('Cần duyệt tất cả trang trước khi bàn giao')
+        raise engine.ReviewError('Cần duyệt tất cả trang trước khi bàn giao', pages=[p['page'] for p in review['pages'] if not p['reviewed']])
     issues, _, _ = review_issues(row, qc)
     if not qc['structural_ok'] or qc['pages_checked'] != qc['pages_expected'] or any(not f['resolved'] for f in issues):
         raise ValueError('QC còn cảnh báo chưa xử lý hoặc kiểm tra thiếu trang')
@@ -885,6 +974,21 @@ def release_job(db_path: Path, job_id: str, *, expected_revision: int, destinati
         return released
 
 
+def _blocking_issues(db_path, candidate):
+    """Unresolved QC warnings of one blocked file as [{page, kind, reason}] (no finding text), best effort."""
+    import engine
+    if candidate['state'] not in {'NEEDS_REVIEW', 'READY'}:
+        return []
+    try:
+        row = get_job(db_path, candidate['id'])
+        review = engine.ensure_job(Path(row['job_dir']) / 'review')
+        _, qc, _ = current_verification(row, review['revision'])
+        issues, _, _ = review_issues(row, qc)
+    except (OSError, ValueError, RuntimeError, KeyError):
+        return []
+    return [dict(page=i['page'], kind=i['kind'], reason=i.get('reason', 'unreadable_page')) for i in issues if not i['resolved']]
+
+
 def release_folder(db_path, paths, destination):
     import engine
     from collections import Counter
@@ -933,7 +1037,9 @@ def release_folder(db_path, paths, destination):
                 name = source_pdf_name(row['source_name'])
                 approved.append((row, pdf, manifest, report, name))
             except (OSError, ValueError, RuntimeError, KeyError) as exc:
-                pending.append(dict(id=candidate['id'], source_name=candidate['source_name'], reason=str(exc)))
+                where = getattr(exc, 'where', None) or {}
+                pending.append(dict(id=candidate['id'], source_name=candidate['source_name'], reason=vi_message(str(exc), where),
+                                    issues=_blocking_issues(db_path, candidate), where={**where, 'file': candidate['source_name']}))
 
         if approved:
             groups = {}
@@ -1044,7 +1150,7 @@ def main():
     if args.command == 'enqueue':
         result = {'ids': enqueue(path, discover_sources(args.input_dir))}
     elif args.command == 'run':
-        result = run_queue(path, jobs=args.jobs, ocr_workers=args.ocr_workers, render_workers=args.render_workers)
+        result = run_if_idle(path, jobs=args.jobs, ocr_workers=args.ocr_workers, render_workers=args.render_workers)
     elif args.command == 'pause':
         pause_queue(path)
         result = {'paused': True}
