@@ -24,6 +24,9 @@ function createEl(id = '', initHide = false) {
     value: '',
     disabled: false,
     blurred: false,
+    focused: false,
+    scrolledIntoView: false,
+    dataset: {},
     attributes: {},
     parentElement: null,
     style: {},
@@ -59,7 +62,10 @@ function createEl(id = '', initHide = false) {
         this.parentElement = null;
       }
     },
-    focus() {},
+    getBoundingClientRect() { return { left: 0, top: 0, width: 200, height: 200 }; },
+    setPointerCapture() {},
+    focus() { this.focused = true; ctx.document.activeElement = this; },
+    scrollIntoView(opts) { this.scrolledIntoView = opts || true; },
     blur() { this.blurred = true; },
     querySelectorAll(sel) { return []; },
     click() {
@@ -649,6 +655,139 @@ vm.runInContext(source, ctx);
   await elements.get('btnRollbackPrev').click();
   assert.ok(updateCalls.some(c => c.url === '/update/rollback'), '#btnRollbackPrev must call POST /update/rollback');
   assert.equal(serverRestarted, true);
+
+  // =========================================================================
+  // 2.1 Phase 1: HTML & CSS for Select-All Toolbar and Focused Item Highlight
+  // =========================================================================
+  const htmlMarkup = fs.readFileSync(path.join(__dirname, 'ui', 'review.html'), 'utf8');
+  assert.match(htmlMarkup, /id="itemsToolbar"/, 'ui/review.html must contain #itemsToolbar');
+  assert.match(htmlMarkup, /id="proposalCountSummary"/, 'ui/review.html must contain #proposalCountSummary');
+  assert.match(htmlMarkup, /id="toggleSelectAllProposals"/, 'ui/review.html must contain #toggleSelectAllProposals button');
+  const cssMarkup = fs.readFileSync(path.join(__dirname, 'ui', 'review.css'), 'utf8');
+  assert.match(cssMarkup, /\.items-toolbar\b/, 'ui/review.css must define .items-toolbar');
+  assert.match(cssMarkup, /\.item\.item-focused\b/, 'ui/review.css must define .item.item-focused');
+
+  // =========================================================================
+  // 2.2 Phase 2: Select-All / Deselect-All Proposals on Current Page
+  // =========================================================================
+  vm.runInContext(`
+    data = {
+      job_id: 'job_sel_all',
+      revision: 1,
+      ocr_pages_count: 0,
+      watermarks_removed: [],
+      pages: [
+        {
+          page: 1, width: 200, height: 200, reviewed: true,
+          manual_rects: [[10, 10, 30, 30]],
+          proposals: [
+            { id: 'p_red', kind: 'PATIENT_NAME', text: 'Nguyen Van A', selected: true, rects: [[10, 40, 80, 60]] },
+            { id: 'p_yellow_1', kind: 'PERSON_NAME_UNCLASSIFIED', text: 'Tran Thi B', selected: false, rects: [[10, 70, 80, 90]] },
+            { id: 'p_yellow_2', kind: 'ADDRESS_VN', text: 'Ha Noi', selected: false, rects: [[10, 100, 80, 120]] }
+          ]
+        },
+        {
+          page: 2, width: 200, height: 200, reviewed: false,
+          manual_rects: [],
+          proposals: []
+        }
+      ]
+    };
+    pn = 0;
+    dirty = false;
+    working = false;
+    show();
+  `, ctx);
+
+  const countSummary = ctx.document.getElementById('proposalCountSummary');
+  const toggleAllBtn = ctx.document.getElementById('toggleSelectAllProposals');
+  assert.equal(countSummary.textContent, 'Đã chọn 1/3 mục');
+  assert.equal(toggleAllBtn.disabled, false);
+  assert.match(toggleAllBtn.textContent, /Tích chọn tất cả \(3\)/);
+
+  // Click 1: Select all proposals (1/3 -> 3/3)
+  toggleAllBtn.click();
+  assert.deepEqual(
+    Array.from(vm.runInContext('page().proposals.map(q => q.selected)', ctx)),
+    [true, true, true],
+    'Clicking #toggleSelectAllProposals when some are unselected must select all proposals'
+  );
+  assert.equal(vm.runInContext('page().reviewed', ctx), false, 'Bulk select must mark page().reviewed = false');
+  assert.equal(vm.runInContext('dirty', ctx), true, 'Bulk select must trigger saveSoon() / dirty = true');
+  assert.equal(countSummary.textContent, 'Đã chọn 3/3 mục');
+  assert.match(toggleAllBtn.textContent, /Bỏ chọn tất cả/);
+  // Manual rects must remain untouched
+  assert.equal(vm.runInContext('page().manual_rects.length', ctx), 1);
+
+  // Click 2: Deselect all proposals when all are already selected (3/3 -> 0/3)
+  toggleAllBtn.click();
+  assert.deepEqual(
+    Array.from(vm.runInContext('page().proposals.map(q => q.selected)', ctx)),
+    [false, false, false],
+    'Clicking #toggleSelectAllProposals when all are selected must deselect all proposals'
+  );
+  assert.equal(countSummary.textContent, 'Đã chọn 0/3 mục');
+  assert.match(toggleAllBtn.textContent, /Tích chọn tất cả \(3\)/);
+
+  // Empty proposals page -> button must be disabled
+  vm.runInContext('pn = 1; show();', ctx);
+  assert.equal(countSummary.textContent, 'Đã chọn 0/0 mục');
+  assert.equal(toggleAllBtn.disabled, true, '#toggleSelectAllProposals must be disabled when page has 0 proposals');
+
+  // =========================================================================
+  // 2.3 Phase 3: Click Yellow/Red Region on PDF Canvas -> Scroll & Focus Right Column Item
+  // =========================================================================
+  vm.runInContext(`
+    pn = 0;
+    manual = false;
+    previewOutput = false;
+    working = false;
+    page().proposals[0].selected = true;   // p_red: [10, 40, 80, 60]
+    page().proposals[1].selected = false;  // p_yellow_1: [10, 70, 80, 90]
+    page().proposals[2].selected = false;  // p_yellow_2: [10, 100, 80, 120]
+    show();
+  `, ctx);
+
+  const canvasEl = elements.get('canvas');
+  // Click inside yellow suspect region p_yellow_1 at (50, 80)
+  canvasEl.onpointerdown({ clientX: 50, clientY: 80, pointerId: 1 });
+  canvasEl.onpointerup({ clientX: 50, clientY: 80, pointerId: 1 });
+
+  assert.equal(vm.runInContext('page().proposals[1].selected', ctx), true, 'Clicking yellow region on PDF must toggle proposal to selected=true');
+  const itemsBox = elements.get('items');
+  const yellowRow = itemsBox.children.find(r => r.dataset && r.dataset.itemKey === 'proposal:p_yellow_1');
+  assert.ok(yellowRow, '#items must render row with data-item-key="proposal:p_yellow_1"');
+  assert.equal(yellowRow.classList.contains('item-focused'), true, 'Clicked yellow region row must have .item-focused class');
+  assert.ok(yellowRow.scrolledIntoView, 'Clicked yellow region row must call scrollIntoView');
+  const yellowCheckbox = yellowRow.children.find(c => c.type === 'checkbox');
+  assert.equal(yellowCheckbox.focused, true, 'Checkbox inside the clicked yellow region row must receive focus');
+
+  // Now click inside red region p_red at (50, 50)
+  canvasEl.onpointerdown({ clientX: 50, clientY: 50, pointerId: 1 });
+  canvasEl.onpointerup({ clientX: 50, clientY: 50, pointerId: 1 });
+
+  assert.equal(vm.runInContext('page().proposals[0].selected', ctx), false, 'Clicking red proposal region on PDF must toggle proposal to selected=false');
+  const redRow = itemsBox.children.find(r => r.dataset && r.dataset.itemKey === 'proposal:p_red');
+  const updatedYellowRow = itemsBox.children.find(r => r.dataset && r.dataset.itemKey === 'proposal:p_yellow_1');
+  assert.equal(redRow.classList.contains('item-focused'), true, 'Newly clicked red region row must have .item-focused class');
+  assert.equal(updatedYellowRow.classList.contains('item-focused'), false, 'Previously focused row must lose .item-focused class');
+  assert.equal(redRow.children.find(c => c.type === 'checkbox').focused, true, 'Checkbox inside clicked red region row must receive focus');
+
+  // Now click inside manual red region manual_rects[0] at (20, 20)
+  canvasEl.onpointerdown({ clientX: 20, clientY: 20, pointerId: 1 });
+  canvasEl.onpointerup({ clientX: 20, clientY: 20, pointerId: 1 });
+
+  assert.equal(vm.runInContext('page().manual_rects.length', ctx), 1, 'Clicking manual red region on PDF must NOT delete the manual rect');
+  const manualRow = itemsBox.children.find(r => r.dataset && r.dataset.itemKey === 'manual:0');
+  assert.ok(manualRow, '#items must render manual rect row with data-item-key="manual:0"');
+  assert.equal(manualRow.classList.contains('item-focused'), true, 'Clicked manual red region row must have .item-focused class');
+  assert.ok(manualRow.scrolledIntoView, 'Clicked manual red region row must call scrollIntoView');
+  const removeBtn = manualRow.children.find(c => c.tagName === 'BUTTON');
+  assert.equal(removeBtn.focused, true, 'Remove button inside clicked manual rect row must receive focus');
+
+  // Navigating to another page resets focusedItemKey to null
+  await vm.runInContext('navigate(1)', ctx);
+  assert.equal(vm.runInContext('focusedItemKey', ctx), null, 'navigate() must reset focusedItemKey to null');
 
   console.log('UI Left-Hand Shortcuts Test: ALL CHECKS PASSED');
 })().catch(e => {
